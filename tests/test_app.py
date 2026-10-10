@@ -183,10 +183,18 @@ class StaticPageTests(unittest.TestCase):
 
     def test_overlap_panel_renders_evidence_and_limits_from_the_server(self):
         script = self.sources["app.js"]
+        self.assertIn('ind.evidence.assessed ? "No group found." : "Overlap not assessed."', script)
         for expected in ("What was observed", "What this does not show", "ind.evidence.observed_statements", "ind.evidence.limit_statements"):
             self.assertIn(expected, script)
         # Member lists and the highlight button exist only for groups the server chose to describe.
         self.assertIn("if (group.members)", script)
+
+    def test_page_count_control_is_bounded_and_explained(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        self.assertIn('id="pages" name="pages" type="number" min="1" max="4" value="1"', html)
+        self.assertIn("A further page is requested only if the previous page provides a next-page token", html)
+        self.assertIn("history_limit, pages }", script)
+        self.assertIn("c.page_statement", script)
 
     def test_synthetic_mode_is_conspicuously_labelled(self):
         self.assertIn("SYNTHETIC DEMO", self.sources["app.js"])

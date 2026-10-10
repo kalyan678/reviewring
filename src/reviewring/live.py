@@ -26,8 +26,10 @@ from reviewring.graph import build_graph
 from reviewring.investigation import (
     DEFAULT_HISTORIES,
     DEFAULT_HISTORY_LIMIT,
+    DEFAULT_REVIEW_PAGES,
     MAX_HISTORIES,
     MAX_HISTORY_LIMIT,
+    MAX_REVIEW_PAGES,
     MIN_HISTORY_LIMIT,
     Collection,
     IsCached,
@@ -37,9 +39,13 @@ from reviewring.investigation import (
     collect,
     describe_error,
     history_params,
+    merge_review_pages,
+    page_statement,
     review_page_params,
     search_params,
+    usable_page_token,
 )
+from reviewring.models import ParsedResponse
 from reviewring.parsers import ParseError, parse_maps_reviews
 from reviewring.serpapi_client import SerpApiError
 from reviewring.views import INVESTIGATION, build_view
@@ -155,6 +161,8 @@ class LiveState:
             "default_history_limit": DEFAULT_HISTORY_LIMIT,
             "min_history_limit": MIN_HISTORY_LIMIT,
             "max_history_limit": MAX_HISTORY_LIMIT,
+            "default_review_pages": DEFAULT_REVIEW_PAGES,
+            "max_review_pages": MAX_REVIEW_PAGES,
         }
 
     # ---------- search ----------
@@ -214,7 +222,37 @@ class LiveState:
 
     # ---------- investigation ----------
 
-    def plan_investigation(self, reference: Any, histories: Any, history_limit: Any = None) -> dict[str, Any]:
+    def _saved_review_pages(self, data_id: str, pages: int) -> tuple[list[ParsedResponse], str]:
+        """Saved review pages from the first, following only saved tokens. No request is made.
+
+        Returns the pages and what is known: ``"all"`` (every requested page is
+        saved), ``"end"`` (the saved pages end before the requested count: no
+        usable next-page token), or ``"open"`` (the next page is not saved).
+        """
+        saved: list[ParsedResponse] = []
+        token: str | None = None
+        used: set[str] = set()
+        for number in range(1, pages + 1):
+            params = review_page_params(data_id, token)
+            if not self._is_cached(params):
+                return saved, "open"
+            try:
+                page = parse_maps_reviews(self._search(params), f"review-page-{number}")
+            except (SerpApiError, ParseError):
+                return saved, "open"
+            if page.page is None or page.page.business_id != data_id or page.page.request_token != token:
+                return saved, "open"
+            saved.append(page)
+            next_token = page.page.next_token
+            if next_token is None or next_token in used or not usable_page_token(next_token):
+                return saved, "end"
+            used.add(next_token)
+            token = next_token
+        return saved, "all"
+
+    def plan_investigation(
+        self, reference: Any, histories: Any, history_limit: Any = None, pages: Any = None
+    ) -> dict[str, Any]:
         with self._lock:
             business = self._businesses.get(reference) if isinstance(reference, str) else None
         if business is None:
@@ -226,6 +264,9 @@ class LiveState:
             raise LiveError(
                 400, f"Choose between {MIN_HISTORY_LIMIT} and {MAX_HISTORY_LIMIT} entries per reviewer history."
             )
+        page_count = DEFAULT_REVIEW_PAGES if pages is None else pages
+        if isinstance(page_count, bool) or not isinstance(page_count, int) or not 1 <= page_count <= MAX_REVIEW_PAGES:
+            raise LiveError(400, f"Choose between 1 and {MAX_REVIEW_PAGES} review pages.")
         window = (
             f" Each history request asks for up to {limit} entries; the API may return fewer, "
             "and a history saved with a different entry limit is not reused."
@@ -233,46 +274,76 @@ class LiveState:
             else ""
         )
 
-        page_params = review_page_params(business["data_id"])
-        if self._is_cached(page_params):
-            # The saved page says exactly which histories would be requested,
-            # so saved ones can be told apart from new requests. No request is made.
-            try:
-                page = parse_maps_reviews(self._search(page_params), "review-page")
-                chosen = choose_reviewers(page, histories, limit)
-            except (SerpApiError, ParseError):
-                chosen = None
-            if chosen is not None:
-                new = sum(1 for contributor_id in chosen if not self._is_cached(history_params(contributor_id, limit)))
-                saved = len(chosen) - new
-                if new == 0:
-                    statement = "No SerpApi request: everything needed is already saved on this computer."
-                else:
-                    statement = (
-                        f"At most {new} SerpApi request{'s' if new != 1 else ''} ({new} credit{'s' if new != 1 else ''}). "
-                        f"The review page and {saved} of {len(chosen)} reviewer histories are already saved on "
-                        "this computer and will not be requested again." + window
-                    )
-                return self._investigation_plan(business, histories, limit, new, statement)
-        maximum = 1 + histories
-        statement = (
-            f"At most {maximum} SerpApi request{'s' if maximum != 1 else ''} ({maximum} credit{'s' if maximum != 1 else ''}): "
-            f"1 for the first page of reviews and up to {histories} for reviewer histories. "
-            "Whether any history is already saved is unknown until the review page is read." + window
-        )
-        return self._investigation_plan(business, histories, limit, maximum, statement)
+        def requests(count: int) -> str:
+            return f"At most {count} SerpApi request{'s' if count != 1 else ''} ({count} credit{'s' if count != 1 else ''})"
+
+        # Saved pages show exactly which pages and histories would be new. No request is made.
+        saved_pages, known = self._saved_review_pages(business["data_id"], page_count)
+        if known in ("all", "end"):
+            chosen = choose_reviewers(merge_review_pages(saved_pages), histories, limit)
+            new = sum(1 for contributor_id in chosen if not self._is_cached(history_params(contributor_id, limit)))
+            saved = len(chosen) - new
+            ended = (
+                f" Only {len(saved_pages)} of the {page_count} requested review pages can be collected: "
+                "the saved responses provide no usable next-page token."
+                if len(saved_pages) < page_count
+                else ""
+            )
+            if new == 0:
+                statement = "No SerpApi request: everything needed is already saved on this computer." + ended
+            else:
+                pages_text = "The review page" if len(saved_pages) == 1 else f"The {len(saved_pages)} review pages"
+                statement = (
+                    f"{requests(new)}. {pages_text} and {saved} of {len(chosen)} reviewer histories are already "
+                    "saved on this computer and will not be requested again." + ended + window
+                )
+            return self._investigation_plan(business, histories, limit, page_count, new, statement)
+
+        new_pages = page_count - len(saved_pages)
+        maximum = new_pages + histories
+        if page_count == 1:
+            statement = (
+                f"{requests(maximum)}: 1 for the first page of reviews and up to {histories} for reviewer "
+                "histories. Whether any history is already saved is unknown until the review page is read." + window
+            )
+        else:
+            statement = (
+                f"{requests(maximum)}: up to {new_pages} for review pages"
+                + (
+                    f" (the first of {page_count} is already saved)"
+                    if len(saved_pages) == 1
+                    else f" (the first {len(saved_pages)} of {page_count} are already saved)"
+                    if saved_pages
+                    else ""
+                )
+                + f" and up to {histories} for reviewer histories. A further review page is requested only if "
+                "the previous response provides a next-page token, so fewer pages may be retrieved than asked "
+                "for. Whether any history is already saved is unknown until the review pages are read." + window
+            )
+        return self._investigation_plan(business, histories, limit, page_count, maximum, statement)
 
     def _investigation_plan(
-        self, business: dict[str, str], histories: int, limit: int, max_requests: int, statement: str
+        self, business: dict[str, str], histories: int, limit: int, pages: int, max_requests: int, statement: str
     ) -> dict[str, Any]:
+        with self._lock:
+            remaining = PROCESS_REQUEST_CEILING - self._requests_attempted
+        if max_requests > remaining:
+            raise LiveError(
+                409,
+                f"This could need {max_requests} new requests, more than the {remaining} this server may still "
+                "send before its safety limit. Choose fewer pages or histories, or restart the server.",
+            )
         plan_id = self._add_plan(
-            "investigation", max_requests, {"business": business, "histories": histories, "history_limit": limit}
+            "investigation",
+            max_requests,
+            {"business": business, "histories": histories, "history_limit": limit, "pages": pages},
         )
         return {
             "plan": plan_id,
             "business": business["title"],
             "histories": histories,
             "history_limit": limit,
+            "pages": pages,
             "max_requests": max_requests,
             "statement": statement,
         }
@@ -284,6 +355,7 @@ class LiveState:
         plan = self._take_plan(plan_id, "investigation")
         business, histories = plan.payload["business"], plan.payload["histories"]
         investigation = _Investigation(business["title"], plan.max_requests, histories)
+        investigation.collection.pages_requested = plan.payload["pages"]
         investigation.history_limit = plan.payload["history_limit"]
         investigation_id = secrets.token_urlsafe(16)
         with self._lock:
@@ -304,17 +376,20 @@ class LiveState:
                     business["data_id"], histories, plan.max_requests,
                     self._guarded_search, self._is_cached, progress,
                     plan.payload["history_limit"],
+                    plan.payload["pages"],
                 )
                 investigation.collection = collection
                 if not collection.parsed:
                     investigation.state = "failed"
                     return
                 try:
-                    investigation.view = build_view(
+                    view = build_view(
                         build_graph(collection.parsed),
                         INVESTIGATION,
                         business_titles={business["data_id"]: business["title"]},
                     )
+                    view["coverage"]["page_statement"] = page_statement(collection)
+                    investigation.view = view
                 except Exception:  # noqa: BLE001
                     # Collection worked but the result cannot be shown. No view is
                     # offered, and exception text is never surfaced.
@@ -350,6 +425,10 @@ class LiveState:
             "histories_planned": collection.histories_planned,
             "histories_collected": collection.histories_collected,
             "responses_collected": len(collection.parsed),
+            "pages_requested": collection.pages_requested,
+            "pages_collected": collection.pages_collected,
+            "more_pages": collection.more_pages,
+            "page_statement": page_statement(collection),
             "stopped": collection.stopped,
         }
         if investigation.state != "running" and investigation.view is not None:

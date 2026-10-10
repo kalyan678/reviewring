@@ -133,9 +133,9 @@ A local dashboard over the graph foundation. It adds no second graph model and n
 
 ## Live Investigation v0.1 (collection from the dashboard, implemented)
 
-Status: implemented. Live validation so far: one run against the real SerpApi service on 2026-10-10, covering one business search and one first page of reviews (two requests, both successful), with zero reviewer histories. Reviewer-history collection, failure handling, and overlap detection in a live investigation have been tested only against a simulated SerpApi.
+Status: implemented. Validated against the real service through the dashboard: one business search, one first review page, two default reviewer histories, and one history with a 50-entry limit. Multi-page review collection, the revised reviewer selection, and overlap detection on overlapping data have been tested only against a simulated SerpApi.
 
-One bounded investigation: Google Maps Search, then the first page of Google Maps Reviews for a chosen business, then Contributor Reviews for a chosen number of that page's reviewers. No further review pages, no requests for businesses found in histories, no recursion.
+One bounded investigation: Google Maps Search, then up to four pages of Google Maps Reviews for the chosen business, then Contributor Reviews for a chosen number of the reviewers on those pages. No requests for businesses found in histories, no recursion.
 
 | Module | Responsibility |
 |---|---|
@@ -158,7 +158,8 @@ Responses are parsed by the existing parsers and merged by `build_graph`, then s
 
 ### Request budget
 
-- A search: 1 new request. An investigation: 1 + the chosen number of histories, 0 to 8 (default 3), so at most 9.
+- A search: 1 new request. An investigation: the chosen number of review pages, 1 to 4 (default 1), plus the chosen number of histories, 0 to 8 (default 3), so at most 12.
+- A plan that could need more new requests than the server may still send before its ceiling is refused when it is made, not part-way through.
 - A plan is single-use, expires after 10 minutes, and records the maximum number of new requests. Execution accepts only a plan the server issued, and enforces the plan's number, so the confirmation shown in the browser cannot be skipped or enlarged.
 - Saved responses are reused and not counted. When the review page is already saved, the plan reads it locally and states exactly how many histories are new; otherwise it states the maximum and says the rest is unknown.
 - One server process attempts at most 30 new requests in total, as a safety net.
@@ -166,6 +167,15 @@ Responses are parsed by the existing parsers and merged by `build_graph`, then s
 - Final states: *complete*; *partial* (collection stopped early, a view of what was collected is shown); *failed* (nothing was collected); *unviewable* (responses were collected and saved, but the view could not be built, so none is offered). Messages are fixed text; exception text never reaches the browser.
 
 Reviewer selection is a fixed coverage rule, not a ranking of suspicion (`choose_reviewers`). In order: reviewers whose reported review count is between 2 and the entry limit, in page order; then those with no reported count, in page order; then those reporting more than the limit, fewest first. A reviewer reporting one review is skipped because that history would only repeat the business. The aim is histories that can be compared in full. Prolific reviewers come last because their histories are returned as small windows and because they share popular places for ordinary reasons. Only the reported count and the page position are used.
+
+### Review pagination
+
+- **Contract, as observed:** the first page is requested with `engine`, `data_id`, and `hl`. When more reviews exist, the response carries `serpapi_pagination.next_page_token`, and the next page is the same request plus `next_page_token`. A second page was collected this way once, by an experiment script; its response echoed the token in `search_parameters`, carried a further token, and had no `place_info`. First pages returned 8 reviews and the second 10.
+- **Following pages** (`investigation.collect`): a page is requested only with a token the previous response returned. Tokens are never constructed. A token is checked for a plausible form before being sent, and one that repeats an earlier token is not followed. The response must be for the same business and must echo the token it was requested with.
+- **Stopping:** at the requested page count; when a response returns no token; or when the token is repeated or malformed, which is reported as unusable pagination and is not a failure, so histories are still collected. A failed request for a later page stops the whole collection, with no retry and no history requests; pages already collected are kept.
+- **Cache and budget:** the token is part of the request and of its cache key, so each page is saved, reused, and counted on its own. Planning follows saved pages to learn how many are already held: if every requested page is saved, or the saved pages end, the plan is exact; otherwise it is the number of pages not yet saved plus the histories.
+- **Selection and graph:** reviewers are chosen from all collected pages together, in page then position order. A reviewer or review appearing on two pages is one node and one edge with two observations, each keeping its source page.
+- **Coverage:** the page states pages requested, pages collected, and what is known beyond them: a token for a further page was provided and not used; no token was provided; the token was unusable; or collection stopped first. Reviews collected are shown against the business's reported total. The absence of a token is reported as exactly that. It is never presented as the end of the reviews, since it does not establish that all reviews were retrieved.
 
 ### Contributor history windows
 

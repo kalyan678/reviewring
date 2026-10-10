@@ -39,6 +39,11 @@
           <div id="results" class="results"></div>
         </fieldset>
         <div class="row">
+          <label for="pages" id="pages-label">Review pages to collect</label>
+          <input id="pages" name="pages" type="number" min="1" max="4" value="1" required>
+        </div>
+        <p class="muted">Each review page is one request. A further page is requested only if the previous page provides a next-page token, so fewer pages may be retrieved than you ask for.</p>
+        <div class="row">
           <label for="histories" id="histories-label">Reviewer histories to collect</label>
           <input id="histories" name="histories" type="number" min="0" max="8" value="3" required>
         </div>

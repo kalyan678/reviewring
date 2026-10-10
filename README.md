@@ -79,7 +79,7 @@ Thirteen fictional reviewers and seven fictional businesses. Five reviewers shar
 
 1. Copy `.env.example` to `.env` and set `SERPAPI_API_KEY`. Never commit `.env`.
 2. Restart the dashboard and open the **Investigate** tab.
-3. **Search** for a business, **select** one from the list, choose how many reviewer histories to collect (0 to 8, default 3) and how many entries to request per history (10 to 200, default 50), and confirm.
+3. **Search** for a business, **select** one from the list, and choose three things: how many review pages to collect (1 to 4, default 1), how many reviewer histories (0 to 8, default 3), and how many entries to request per history (10 to 200, default 50). Then confirm.
 
 Without a key the tab explains that one is required; nothing can be sent.
 
@@ -88,12 +88,14 @@ Without a key the tab explains that one is required; nothing can be sent.
 | Action | Most it can send |
 |---|---|
 | A search | 1 request |
-| An investigation | 1 for the first page of reviews + 1 per reviewer history you chose (at most 9) |
+| An investigation | 1 per review page you chose + 1 per reviewer history you chose (at most 4 + 8 = 12) |
 | One run of the server | 30 new requests in total, then it refuses until restarted |
 
 - Before anything is sent the page states the maximum and waits for you to confirm. The server enforces that same maximum; the confirmation cannot be skipped.
 - Responses already saved on your computer are reused and cost nothing.
-- It reads only the first page of reviews. It never follows further pages, never requests reviews for businesses found in histories, and never retries.
+- **Review pages.** It collects only as many review pages as you chose, for the selected business only. A further page is requested only with the next-page token the previous response returned; if none is returned, pagination ends there, so fewer pages may be collected than you asked for and fewer requests sent. A token that was provided but not used is reported as exactly that: an offer of a further page, not a retrieved page. Each page is saved and reused on its own. It never requests reviews for businesses found in histories and never retries.
+- **Reading the coverage.** The Coverage panel says how many pages were requested and collected, whether the service provided a token for a further page, and how many reviews were collected against the total the business reports. A response without a next-page token does not establish that all reviews were retrieved.
+- **Examples.** With 3 histories: 1 page is at most 4 requests, 2 pages at most 5, 3 pages at most 6, 4 pages at most 7. In this project's runs a first page returned 8 reviews and a second page 10, so 4 pages is roughly 30 to 40 reviewers if the business has that many.
 - **A history is a window, not a full record.** Each history request asks for a reviewer's most recent reviews up to the entry limit, and the service may return fewer. The Coverage panel says how many retrieved histories look partial, of unknown completeness, or apparently complete, and how small a share of those reviewers' reported reviews was retrieved.
 - **Which reviewers are chosen.** First those whose reported review count fits within the entry limit, in page order; then those with no reported count; last those reporting more than the limit, fewest first. A reviewer reporting a single review is skipped. This favours histories that can actually be compared and avoids always picking the most prolific accounts, who share popular places for ordinary reasons. Only the reported count and page position are used.
 - A history saved with one entry limit is not reused for another limit; that request would be new.
@@ -111,13 +113,16 @@ All figures are from `docs/EXPERIMENTS.md`. Eleven SerpApi requests were attempt
 - **The dashboard's live workflow ran end to end:** one business search and one first page of reviews, then, in a later run, two reviewer histories for that page. Both histories returned exactly 10 entries for reviewers whose profiles report over 500 reviews, with no next-page marker, and the two shared no business. That is why histories are treated as windows.
 - **One live failure was observed:** a request rejected with an authentication error stopped collection at once, kept the page data, and showed a fixed message.
 
-Not verified against the real service: the entry limit (`num` is documented by SerpApi but has not been sent in a live request by this project, so how many entries it actually returns is unknown), the revised reviewer selection, overlap detection on real data that contains overlap, and timeouts. These are tested against a simulated SerpApi only.
+- **The entry limit works:** one history requested with 50 entries returned 50, beginning with the same 10 as before.
+
+Not verified against the real service: collecting more than one review page through the dashboard (a second page was collected once by an experiment script, not by the dashboard), the revised reviewer selection, overlap detection on real data that contains overlap, and timeouts. These are tested against a simulated SerpApi only.
 
 ## Limitations
 
 - The real sample is far too small to measure overlap. The only overlap pattern in this repository is the synthetic one.
 - The overlap indicator is purely structural. It cannot tell arranged reviews from ordinary shared habits, and it sees only what was collected.
-- A live investigation sees one page of one business's reviews and a handful of history windows. A business two reviewers share outside those windows is not seen.
+- A live investigation sees at most four pages of one business's reviews and a handful of history windows. A business two reviewers share outside those windows is not seen.
+- If a request for a later review page fails, collection stops there and no histories are requested; the pages already collected are shown.
 - No coordination score, community detection, temporal analysis, ring expansion, or adjusted rating is implemented.
 - Investigations are kept in memory and disappear when the server stops. Their saved responses remain and then appear in the collected sample, alongside any unrelated ones.
 - Browser checks were run in one desktop browser engine.

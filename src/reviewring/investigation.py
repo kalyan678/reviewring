@@ -34,6 +34,21 @@ MAPS_SEARCH_ENGINE = "google_maps"
 DEFAULT_HISTORIES = 3
 MAX_HISTORIES = 8
 
+# Review pages collected for the investigated business, including the first.
+# Each further page is one request and is made only with a next-page token the
+# previous response actually returned.
+DEFAULT_REVIEW_PAGES = 1
+MAX_REVIEW_PAGES = 4
+
+# A next-page token is opaque. It is only checked for a plausible form before
+# being sent back, so that a malformed value is never forwarded.
+_PAGE_TOKEN = re.compile(r"[A-Za-z0-9_\-=+/.%:~]{1,2048}")
+
+PAGINATION_UNUSABLE = (
+    "The next-page token returned by the service repeated an earlier one or was not usable, "
+    "so no further review page was requested."
+)
+
 # Entries requested per contributor history (the documented `num` parameter).
 # The default is above the API's own default of 10, so that an ordinary
 # reviewer's whole history fits in one request, and well below the documented
@@ -59,8 +74,29 @@ def search_params(query: str) -> dict[str, str]:
     return {"engine": MAPS_SEARCH_ENGINE, "q": query, "type": "search"}
 
 
-def review_page_params(data_id: str) -> dict[str, str]:
-    return {"engine": MAPS_REVIEWS_ENGINE, "data_id": data_id, "hl": "en"}
+def review_page_params(data_id: str, token: str | None = None) -> dict[str, str]:
+    """Google Maps Reviews request: the first page, or the page a returned token points to.
+
+    The four parameter names are the ones observed in SerpApi's own pagination
+    link. A token is part of the request and of its cache identity, so each
+    page is saved, reused, and counted separately.
+    """
+    params = {"engine": MAPS_REVIEWS_ENGINE, "data_id": data_id, "hl": "en"}
+    if token is not None:
+        params["next_page_token"] = token
+    return params
+
+
+def usable_page_token(token: Any) -> bool:
+    return isinstance(token, str) and _PAGE_TOKEN.fullmatch(token) is not None
+
+
+def merge_review_pages(pages: list[ParsedResponse]) -> ParsedResponse:
+    """The reviewers of several pages as one list, in page then position order, for selection."""
+    merged = ParsedResponse(source_file="review-pages", engine=MAPS_REVIEWS_ENGINE)
+    for page in pages:
+        merged.reviewer_attributes.extend(page.reviewer_attributes)
+    return merged
 
 
 def history_params(contributor_id: str, limit: int = CONTRIBUTOR_REVIEWS_DEFAULT_NUM) -> dict[str, Any]:
@@ -145,6 +181,40 @@ class Collection:
     histories_planned: int = 0
     histories_collected: int = 0
     stopped: str | None = None  # user-safe reason when collection ended early
+    pages_requested: int = DEFAULT_REVIEW_PAGES
+    pages_collected: int = 0
+    # After the last collected page: True = the service offered a further page,
+    # False = it offered none, None = not known (nothing collected, or the
+    # marker it returned could not be used).
+    more_pages: bool | None = None
+    pagination_note: str | None = None
+
+
+TOKEN_NOT_USED = "The service provided a token for a further page, which was not used."
+
+
+def page_statement(collection: Collection) -> str:
+    """Pages asked for, pages retrieved, and what is known about further pages."""
+    asked, got = collection.pages_requested, collection.pages_collected
+    pages = lambda n: f"{n} review page{'' if n == 1 else 's'}"  # noqa: E731
+    if got == 0:
+        return f"No review page was collected ({pages(asked)} requested)."
+    text = f"{got} of {pages(asked)} requested {'was' if got == 1 else 'were'} collected."
+    if collection.pagination_note:
+        return f"{text} {collection.pagination_note}"
+    if collection.more_pages is False:
+        # Only what was observed: no token came back. That is not evidence that
+        # no further reviews exist.
+        if got < asked:
+            text += " The service did not provide another page token, so collection stopped before the requested page limit."
+        else:
+            text += " The service did not provide another page token."
+        return text + " This does not establish that all reviews were retrieved."
+    if got < asked:
+        return f"{text} Collection stopped before the remaining pages were requested."
+    # A token is an offer of a further page, not a page: nothing beyond the
+    # collected pages was retrieved.
+    return f"{text} {TOKEN_NOT_USED}"
 
 
 def collect(
@@ -155,14 +225,20 @@ def collect(
     is_cached: IsCached,
     on_progress: Callable[[Collection], None] | None = None,
     history_limit: int = DEFAULT_HISTORY_LIMIT,
+    pages: int = DEFAULT_REVIEW_PAGES,
 ) -> Collection:
-    """Collect one review page and up to ``histories`` contributor histories.
+    """Collect up to ``pages`` review pages, then up to ``histories`` contributor histories.
+
+    A further review page is requested only with a next-page token the previous
+    response returned; tokens are never constructed, and one is never used
+    twice. Reviewers are chosen from all collected pages together.
 
     At most ``max_requests`` new SerpApi requests are attempted; saved responses
     do not count. Collection stops at the first failure of any kind, keeping
-    everything collected so far; it never raises.
+    everything collected so far; it never raises and never retries.
     """
-    result = Collection()
+    pages = min(max(pages, 1), MAX_REVIEW_PAGES)
+    result = Collection(pages_requested=pages)
 
     def fetch(params: dict[str, Any]) -> dict[str, Any]:
         if is_cached(params):
@@ -178,11 +254,29 @@ def collect(
             on_progress(result)
 
     try:
-        page = parse_maps_reviews(fetch(review_page_params(data_id)), "review-page")
-        if page.page is None or page.page.business_id != data_id:
-            raise ParseError("response is for a different business")
-        result.parsed.append(page)
-        chosen = choose_reviewers(page, min(histories, MAX_HISTORIES), history_limit)
+        review_pages: list[ParsedResponse] = []
+        token: str | None = None
+        used_tokens: set[str] = set()
+        for number in range(1, pages + 1):
+            page = parse_maps_reviews(fetch(review_page_params(data_id, token)), f"review-page-{number}")
+            if page.page is None or page.page.business_id != data_id or page.page.request_token != token:
+                raise ParseError("response is for a different business or page")
+            result.parsed.append(page)
+            review_pages.append(page)
+            result.pages_collected = number
+            next_token = page.page.next_token
+            if next_token is None:
+                result.more_pages = False
+                break
+            if next_token in used_tokens or not usable_page_token(next_token):
+                result.more_pages = None
+                result.pagination_note = PAGINATION_UNUSABLE
+                break
+            result.more_pages = True
+            used_tokens.add(next_token)
+            token = next_token
+            report()
+        chosen = choose_reviewers(merge_review_pages(review_pages), min(histories, MAX_HISTORIES), history_limit)
         result.histories_planned = len(chosen)
         report()
         for number, contributor_id in enumerate(chosen, start=1):

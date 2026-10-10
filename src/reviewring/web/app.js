@@ -183,9 +183,10 @@ function renderCoverage(view) {
   for (const row of c.business_rows) {
     let note = `${plural(row.pages, "review page")} collected.`;
     if (row.not_collected) note += ` ${row.not_collected} reported reviews not collected.`;
-    if (row.further_pages) note += " A further page was offered and not requested.";
+    if (row.further_pages) note += " A token for a further page was provided and not used.";
     parts.push(meter(row.label, row.captured, row.reported_total, note));
   }
+  if (c.page_statement) parts.push(el("p", { class: "muted" }, c.page_statement));
   parts.push(
     el("h3", {}, "Reviewer histories collected"),
     meter(
@@ -218,7 +219,7 @@ function renderIndicators(view) {
     for (const item of items) ul.append(el("li", {}, item));
     return ul;
   };
-  if (!ind.group_count) parts.push(el("p", { class: "headline" }, "No group found."));
+  if (!ind.group_count) parts.push(el("p", { class: "headline" }, ind.evidence.assessed ? "No group found." : "Overlap not assessed."));
   parts.push(
     el("h3", {}, "What was observed"),
     list(ind.evidence.observed_statements),
@@ -539,6 +540,9 @@ async function openInvestigate() {
     $("histories").max = String(session.max_histories);
     $("histories").value = String(session.default_histories);
     $("histories-label").textContent = `Reviewer histories to collect (0 to ${session.max_histories})`;
+    $("pages").max = String(session.max_review_pages);
+    $("pages").value = String(session.default_review_pages);
+    $("pages-label").textContent = `Review pages to collect (1 to ${session.max_review_pages})`;
     $("history-limit").min = String(session.min_history_limit);
     $("history-limit").max = String(session.max_history_limit);
     $("history-limit").value = String(session.default_history_limit);
@@ -570,7 +574,8 @@ function showResults(businesses) {
 }
 
 function progressText(status) {
-  return `Collecting: ${plural(status.requests_sent, "new request")} sent of at most ${status.max_requests}, ` +
+  return `Collecting: ${status.pages_collected} of ${plural(status.pages_requested, "review page")} so far, ` +
+    `${plural(status.requests_sent, "new request")} sent of at most ${status.max_requests}, ` +
     `${plural(status.saved_responses_used, "saved response")} reused, ` +
     `${status.histories_collected} of ${status.histories_planned || status.histories_requested} reviewer histories collected.`;
 }
@@ -583,6 +588,7 @@ function finishInvestigation(status) {
   if (status.histories_planned < status.histories_requested && status.state !== "failed") {
     lines.push(`Only ${plural(status.histories_planned, "reviewer")} on the first page reported more than one review, so fewer histories were requested than asked for.`);
   }
+  if (status.state !== "failed") lines.push(status.page_statement);
   if (status.state === "partial") lines.push(`Stopped early: ${status.stopped} What was collected before that is shown below.`);
   if (status.state === "failed") lines.push(`Nothing could be collected: ${status.stopped}`);
   if (status.state === "unviewable") {
@@ -627,7 +633,8 @@ $("results-form").addEventListener("submit", (event) => {
   if (!chosen) return liveError("Choose a business first.");
   guarded(async () => {
     const history_limit = Number.parseInt($("history-limit").value, 10);
-    const plan = await post("/api/investigations/plan", { business: chosen.value, histories, history_limit });
+    const pages = Number.parseInt($("pages").value, 10);
+    const plan = await post("/api/investigations/plan", { business: chosen.value, histories, history_limit, pages });
     askConfirm(plan, async () => {
       $("live-summary").hidden = true;
       $("dashboard").hidden = true;

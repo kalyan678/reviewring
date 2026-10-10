@@ -292,7 +292,16 @@ def _overlap_evidence(
         + (f", {limited} of them partial or of unknown completeness" if limited else "")
         + "."
     )
-    if not pairs:
+    # Overlap between reviewers is only observable through retrieved histories.
+    assessed = bool(pairs) or coverage["reviewers_with_history"] >= 2
+    if not assessed:
+        retrieved = coverage["reviewers_with_history"]
+        observed = [
+            "Overlap was not assessed. It can only be seen between reviewers whose review histories were "
+            f"retrieved, and {'none was' if retrieved == 0 else 'only 1 was'}."
+        ]
+        limits = ["This is not a finding of no overlap: nothing was compared."]
+    elif not pairs:
         observed = [f"No reviewer pair shares {minimum} or more businesses within the retrieved data."]
         limits = [compared + " This is not a finding that no overlap exists."]
     else:
@@ -328,6 +337,7 @@ def _overlap_evidence(
                 "public review pages could work out who is in it."
             )
     return {
+        "assessed": assessed,
         "observed": bool(pairs),
         "pairs": len(pairs),
         "reviewers_involved": None if withhold else len(involved_reviewers),

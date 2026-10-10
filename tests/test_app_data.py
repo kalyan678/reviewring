@@ -711,6 +711,24 @@ class OverlapEvidenceTests(unittest.TestCase):
         self.assertEqual(view["explanation"]["headline"], "No repeated overlap observed in the retrieved review windows.")
         self.assertEqual(view["indicators"]["groups_withheld"], 0)
 
+    def test_without_two_histories_the_panel_says_overlap_was_not_assessed(self):
+        for others, phrase in ((set(), "none was"), ({3}, "only 1 was")):
+            with self.subTest(histories=len(others)):
+                view = self.investigation(members=set(), shared=[], others=others)
+                evidence = view["indicators"]["evidence"]
+                self.assertEqual((evidence["assessed"], evidence["observed"], evidence["pairs"]), (False, False, 0))
+                self.assertTrue(evidence["observed_statements"][0].startswith("Overlap was not assessed."))
+                self.assertIn(phrase, evidence["observed_statements"][0])
+                self.assertEqual(evidence["limit_statements"], ["This is not a finding of no overlap: nothing was compared."])
+                text = json.dumps(view["indicators"])
+                for negative_finding in ("No reviewer pair shares", "No overlap", "no overlap was found"):
+                    self.assertNotIn(negative_finding, text)
+                self.assertEqual(view["explanation"]["headline"], "Coordination cannot be assessed from this data.")
+        # With two or more histories and nothing shared, the observation is stated as an observation.
+        assessed = self.investigation(members=set(), shared=[], others={1, 2})["indicators"]["evidence"]
+        self.assertEqual((assessed["assessed"], assessed["observed"]), (True, False))
+        self.assertEqual(assessed["observed_statements"], ["No reviewer pair shares 2 or more businesses within the retrieved data."])
+
     def test_coverage_uncertainty_stays_visible_beside_the_evidence(self):
         view = self.investigation(members={1, 2}, shared=[MARKER_BUSINESS_B], others={3})
         limits = " ".join(view["indicators"]["evidence"]["limit_statements"])

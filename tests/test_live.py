@@ -26,9 +26,12 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from reviewring import app, live  # noqa: E402
+from reviewring.graph import build_graph, compute_metrics  # noqa: E402
 from reviewring.investigation import (  # noqa: E402
     DEFAULT_HISTORY_LIMIT,
     choose_reviewers,
+    page_statement,
+    usable_page_token,
     collect,
     describe_error,
     history_params,
@@ -38,6 +41,7 @@ from reviewring.investigation import (  # noqa: E402
 from reviewring.models import MAPS_REVIEWS_ENGINE, ParsedResponse, ReviewerAttributes  # noqa: E402
 from reviewring.parsers import parse_maps_reviews  # noqa: E402
 from reviewring.serpapi_client import cache_key  # noqa: E402
+from reviewring.views import INVESTIGATION, build_view  # noqa: E402
 from reviewring.serpapi_client import MissingApiKeyError, SerpApiError  # noqa: E402
 
 BUSINESS = "0x00000000000000aa:0x00000000000000a1"
@@ -46,7 +50,10 @@ SHARED_BUSINESS = "0x00000000000000cc:0x00000000000000c1"
 PRIVATE_NAME = "Private Reviewer Name"
 PRIVATE_TEXT = "Private review text."
 # Reported review counts for reviewers 1-6 on the page, in page order.
-REPORTED = {1: 1, 2: 5, 3: 3, 4: None, 5: 2, 6: 4}
+REPORTED = {1: 1, 2: 5, 3: 3, 4: None, 5: 2, 6: 4, 7: 3, 8: 2, 9: 60, 10: 1, 11: 4, 12: None}
+FIRST_PAGE = [1, 2, 3, 4, 5, 6]
+# A business with four review pages, for pagination tests.
+FOUR_PAGES = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]
 
 
 def reviewer(n: int) -> str:
@@ -67,6 +74,19 @@ class FakeSerpApi:
         self.fail_new_request_number: int | None = None
         self.error: Exception = SerpApiError("SerpApi request failed (ReadTimeout)")
         self.key_configured = True
+        # Reviewers on each review page. After the last page a token is still
+        # offered when ``more_after_last`` is set (the business has more pages
+        # than this fake defines); asking for it is rejected.
+        self.review_pages: list[list[int]] = [FIRST_PAGE]
+        self.more_after_last = True
+        self.token_overrides: dict[int, object] = {}  # page index -> next token to return instead
+
+    def next_token(self, index: int) -> object:
+        if index in self.token_overrides:
+            return self.token_overrides[index]
+        if index + 1 < len(self.review_pages):
+            return f"PRIVATE-TOKEN-{index + 2}"
+        return "PRIVATE-TOKEN" if self.more_after_last else None
 
     def is_cached(self, params: dict) -> bool:
         return key(params) in self.saved
@@ -79,7 +99,9 @@ class FakeSerpApi:
             self.new_requests += 1
             if self.new_requests == self.fail_new_request_number:
                 raise self.error
+            response = self.respond(params)  # a rejected request is never saved
             self.saved.add(key(params))
+            return response
         return self.respond(params)
 
     def respond(self, params: dict) -> dict:
@@ -95,21 +117,32 @@ class FakeSerpApi:
                 ],
             }
         if engine == "google_maps_reviews":
-            reviews = [
-                {
-                    "review_id": f"page-{n}",
-                    "rating": 5.0,
-                    "snippet": PRIVATE_TEXT,
-                    "user": {"name": PRIVATE_NAME, "contributor_id": reviewer(n), **({"reviews": count} if count is not None else {})},
-                }
-                for n, count in REPORTED.items()
-            ]
-            return {
+            token = params.get("next_page_token")
+            tokens: dict[object, int] = {}
+            for i in range(len(self.review_pages) - 1):
+                if isinstance(self.next_token(i), str):
+                    tokens.setdefault(self.next_token(i), i + 1)  # a repeated token leads to the first page it named
+            index = 0 if token is None else tokens.get(token)
+            if index is None:
+                raise SerpApiError(f"SerpApi error (HTTP 400): Invalid next_page_token {token}")
+            response = {
                 "search_parameters": dict(params),
-                "place_info": {"title": "Alpha Bakery", "type": "Bakery", "reviews": 120, "rating": 4.5},
-                "reviews": reviews,
-                "serpapi_pagination": {"next_page_token": "PRIVATE-TOKEN"},
+                "reviews": [
+                    {
+                        "review_id": f"page-{n}",
+                        "rating": 5.0,
+                        "snippet": PRIVATE_TEXT,
+                        "user": {"name": PRIVATE_NAME, "contributor_id": reviewer(n), **({"reviews": REPORTED[n]} if REPORTED[n] is not None else {})},
+                    }
+                    for n in self.review_pages[index]
+                ],
             }
+            if index == 0:  # observed: only the first page carries place_info
+                response["place_info"] = {"title": "Alpha Bakery", "type": "Bakery", "reviews": 120, "rating": 4.5}
+            following = self.next_token(index)
+            if following is not None:
+                response["serpapi_pagination"] = {"next_page_token": following}
+            return response
         number = int(params["contributor_id"][-2:])
         entries = [{"review_id": f"page-{number}", "rating": 5, "place_info": {"data_id": BUSINESS, "type": "Bakery"}}]
         # Reviewers 2 and 3 both also reviewed one other business.
@@ -491,10 +524,22 @@ class LiveStateTests(unittest.TestCase):
         self.assertEqual(self.api.new_requests, 0)
 
     def test_process_ceiling_refuses_further_new_requests(self):
-        with mock.patch.object(live, "PROCESS_REQUEST_CEILING", 2):
-            status = self.investigate(histories=3)  # search + page reach the ceiling
+        ref = self.search()[0]["ref"]
+        plan = self.state.plan_investigation(ref, 3)
+        with mock.patch.object(live, "PROCESS_REQUEST_CEILING", 2):  # the search used one; one remains
+            started = self.state.start_investigation(plan["plan"])
+            self.state._investigations[started["investigation"]].thread.join(timeout=10)
+        status = self.state.investigation_status(started["investigation"])
         self.assertEqual((self.api.new_requests, status["state"], status["histories_collected"]), (2, "partial", 0))
         self.assertIn("safety limit", status["stopped"])
+
+    def test_a_plan_that_could_exceed_the_remaining_ceiling_is_refused(self):
+        ref = self.search()[0]["ref"]
+        with mock.patch.object(live, "PROCESS_REQUEST_CEILING", 4):  # three requests remain
+            self.assert_error(409, self.state.plan_investigation, ref, 3)        # 1 page + 3 histories
+            self.assert_error(409, self.state.plan_investigation, ref, 0, None, 4)  # 4 pages
+            self.assertEqual(self.state.plan_investigation(ref, 2)["max_requests"], 3)
+        self.assertEqual(self.api.new_requests, 1)
 
     def test_only_one_investigation_runs_at_a_time(self):
         ref = self.search()[0]["ref"]
@@ -527,6 +572,326 @@ class LiveStateTests(unittest.TestCase):
         for n in range(live.MAX_STORED + 5):
             self.state.plan_search(f"bakery number {n}")
         self.assertEqual(len(self.state._plans), live.MAX_STORED)
+
+
+class MultiPageCollectionTests(unittest.TestCase):
+    """Bounded review pagination: only tokens the service returned, never more than asked or budgeted."""
+
+    def setUp(self):
+        self.api = FakeSerpApi()
+        self.api.review_pages = FOUR_PAGES
+        self.api.more_after_last = False
+
+    def run_collect(self, pages, histories=0, max_requests=20):
+        return collect(BUSINESS, histories, max_requests, self.api.search, self.api.is_cached, None, DEFAULT_HISTORY_LIMIT, pages)
+
+    def page_calls(self):
+        return [c for c in self.api.calls if c["engine"] == "google_maps_reviews"]
+
+    def test_one_page_is_unchanged(self):
+        result = collect(BUSINESS, 0, 1, self.api.search, self.api.is_cached)  # default page count
+        self.assertEqual(self.api.calls, [{"engine": "google_maps_reviews", "data_id": BUSINESS, "hl": "en"}])
+        self.assertEqual((result.pages_requested, result.pages_collected, result.more_pages, result.stopped), (1, 1, True, None))
+        self.assertEqual(page_statement(result), "1 of 1 review page requested was collected. The service provided a token for a further page, which was not used.")
+
+    def test_two_three_and_four_pages_follow_only_returned_tokens(self):
+        for pages in (2, 3, 4):
+            with self.subTest(pages=pages):
+                self.setUp()
+                result = self.run_collect(pages)
+                self.assertEqual((result.pages_collected, result.requests_sent, result.stopped), (pages, pages, None))
+                self.assertEqual(
+                    [c.get("next_page_token") for c in self.page_calls()],
+                    [None] + [f"PRIVATE-TOKEN-{n}" for n in range(2, pages + 1)],
+                )
+                for call in self.page_calls():
+                    self.assertEqual(set(call) - {"next_page_token"}, {"engine", "data_id", "hl"})
+                    self.assertEqual(call["data_id"], BUSINESS)
+                self.assertEqual(len({o.reviewer_id for p in result.parsed for o in p.observations}), 3 * pages)
+                self.assertEqual(result.more_pages, pages < 4)
+        self.assertEqual(
+            page_statement(result),
+            "4 of 4 review pages requested were collected. The service did not provide another page token. "
+            "This does not establish that all reviews were retrieved.",
+        )
+
+    def test_missing_next_page_token_ends_pagination_without_a_request(self):
+        self.api.review_pages = FOUR_PAGES[:2]
+        result = self.run_collect(4, histories=1)
+        self.assertEqual((result.pages_requested, result.pages_collected, result.more_pages), (4, 2, False))
+        self.assertEqual((len(self.page_calls()), result.histories_collected, result.stopped), (2, 1, None))
+        self.assertEqual(
+            page_statement(result),
+            "2 of 4 review pages requested were collected. The service did not provide another page token, so "
+            "collection stopped before the requested page limit. This does not establish that all reviews were retrieved.",
+        )
+
+    def test_an_offered_token_is_worded_as_a_token_not_as_a_retrieved_page(self):
+        result = self.run_collect(2)
+        statement = page_statement(result)
+        self.assertEqual(statement, "2 of 2 review pages requested were collected. The service provided a token for a further page, which was not used.")
+        for confusing in ("offered a further page", "further page was collected", "next page was retrieved"):
+            self.assertNotIn(confusing, statement)
+        self.api.token_overrides = {0: "bad token"}
+        self.api.saved.clear()
+        self.assertIn("The next-page token returned by the service", page_statement(self.run_collect(2)))
+
+    def test_a_missing_token_is_never_reported_as_the_end_of_the_reviews(self):
+        # Regression: an absent next-page token is an observation about the response,
+        # not evidence that no further pages or reviews exist.
+        for available, asked in ((2, 4), (2, 2), (1, 3), (4, 4)):
+            with self.subTest(available=available, asked=asked):
+                self.setUp()
+                self.api.review_pages = FOUR_PAGES[:available]
+                statement = page_statement(self.run_collect(asked))
+                self.assertIn("did not provide another page token", statement)
+                self.assertTrue(statement.endswith("This does not establish that all reviews were retrieved."))
+                for overclaim in ("do not exist", "no further page", "no more reviews", "all reviews were collected", "every review"):
+                    self.assertNotIn(overclaim, statement)
+                self.assertEqual("stopped before the requested page limit" in statement, available < asked)
+
+    def test_repeated_or_malformed_tokens_are_never_sent_back(self):
+        cases = {
+            "repeats the token just used": {1: "PRIVATE-TOKEN-2"},
+            "contains spaces": {0: "bad token"},
+            "contains a line break": {0: "bad\ntoken"},
+            "is not text": {0: 12345},
+            "is far too long": {0: "A" * 5000},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(case=label):
+                self.setUp()
+                self.api.token_overrides = overrides
+                result = self.run_collect(4, histories=1)
+                expected_pages = 2 if 1 in overrides else 1
+                self.assertEqual((result.pages_collected, len(self.page_calls())), (expected_pages, expected_pages))
+                self.assertEqual(result.stopped, None)  # not a failure: histories still run
+                self.assertEqual(result.histories_collected, 1)
+                sent = [c.get("next_page_token") for c in self.page_calls()]
+                self.assertEqual(len(sent), len(set(sent)))
+                if label == "is not text":
+                    # A non-text marker is treated as no marker at all.
+                    self.assertEqual((result.more_pages, result.pagination_note), (False, None))
+                else:
+                    self.assertEqual(result.more_pages, None)
+                    self.assertIn("not usable", page_statement(result))
+        # An empty marker is the same as none.
+        self.setUp()
+        self.api.token_overrides = {0: ""}
+        self.assertEqual(self.run_collect(3).more_pages, False)
+
+    def test_expired_token_or_failure_on_a_later_page_keeps_earlier_pages(self):
+        for error, message in (
+            (SerpApiError(f"SerpApi error (HTTP 400): token expired for {BUSINESS}"), "SerpApi rejected the request (HTTP 400)."),
+            (SerpApiError("SerpApi request failed (ReadTimeout)"), "The request to SerpApi failed or timed out. It may still have used a credit."),
+        ):
+            with self.subTest(message=message):
+                self.setUp()
+                self.api.fail_new_request_number, self.api.error = 3, error
+                result = self.run_collect(4, histories=2)
+                self.assertEqual((result.pages_collected, self.api.new_requests, result.histories_collected), (2, 3, 0))
+                self.assertEqual((result.stopped, len(result.parsed)), (message, 2))
+                self.assertEqual(page_statement(result), "2 of 4 review pages requested were collected. Collection stopped before the remaining pages were requested.")
+
+    def test_saved_pages_are_reused_individually(self):
+        self.run_collect(2)
+        first_run = self.api.new_requests
+        result = self.run_collect(4, histories=0)
+        self.assertEqual((first_run, result.requests_sent, result.cache_hits, result.pages_collected), (2, 2, 2, 4))
+        again = self.run_collect(4)
+        self.assertEqual((again.requests_sent, again.cache_hits), (0, 4))
+
+    def test_budget_is_enforced_across_pages_and_histories(self):
+        result = self.run_collect(4, histories=2, max_requests=3)
+        self.assertEqual((self.api.new_requests, result.pages_collected, result.histories_collected), (3, 3, 0))
+        self.assertIn("budget", result.stopped)
+        self.setUp()
+        result = self.run_collect(3, histories=2, max_requests=5)
+        self.assertEqual((self.api.new_requests, result.pages_collected, result.histories_collected, result.stopped), (5, 3, 2, None))
+
+    def test_page_count_is_clamped_to_the_supported_range(self):
+        self.assertEqual(self.run_collect(9).pages_collected, 4)
+        self.setUp()
+        self.assertEqual(self.run_collect(0).pages_collected, 1)
+
+    def test_reviewers_are_selected_from_all_collected_pages(self):
+        result = self.run_collect(3, histories=5)
+        requested = [c["contributor_id"] for c in self.api.calls if "contributor_id" in c]
+        # Pages 1-3 hold reviewers 1-9. Fit the window, in page order: 2, 3, 5, 6, 7 (8 would be next).
+        self.assertEqual(requested, [reviewer(n) for n in (2, 3, 5, 6, 7)])
+        self.assertEqual(result.histories_planned, 5)
+        one_page = FakeSerpApi()
+        one_page.review_pages, one_page.more_after_last = FOUR_PAGES, False
+        collect(BUSINESS, 5, 20, one_page.search, one_page.is_cached, None, DEFAULT_HISTORY_LIMIT, 1)
+        self.assertEqual([c["contributor_id"] for c in one_page.calls if "contributor_id" in c], [reviewer(2), reviewer(3)])
+
+    def test_duplicate_reviewers_and_reviews_across_pages_are_merged(self):
+        self.api.review_pages = [[1, 2, 3], [3, 4, 2], [5]]
+        result = self.run_collect(3, histories=4)
+        graph = build_graph(result.parsed)
+        metrics = compute_metrics(graph)
+        page_edges = [e for (r, b), e in graph.edges.items() if b == BUSINESS]
+        self.assertEqual(len(page_edges), 5)  # five distinct reviewers of the business, not seven
+        self.assertEqual(sorted(len([o for o in e.observations if o.source.engine == "google_maps_reviews"]) for e in page_edges), [1, 1, 1, 2, 2])
+        self.assertEqual(metrics.conflicts, {})
+        self.assertEqual(metrics.business_degrees[5], 1)
+        # A reviewer seen on two pages is asked for one history, once.
+        requested = [c["contributor_id"] for c in self.api.calls if "contributor_id" in c]
+        self.assertEqual(requested, [reviewer(n) for n in (2, 3, 5, 4)])
+        self.assertEqual({o.source.file for e in page_edges for o in e.observations if o.source.engine == "google_maps_reviews"}, {"review-page-1", "review-page-2", "review-page-3"})
+
+    def test_graph_and_coverage_reflect_every_collected_page(self):
+        result = self.run_collect(3, histories=2)
+        view = build_view(build_graph(result.parsed), INVESTIGATION, business_titles={BUSINESS: "Alpha Bakery"})
+        row = view["coverage"]["business_rows"][0]
+        self.assertEqual((row["label"], row["pages"], row["captured"], row["reported_total"], row["not_collected"]), ("Alpha Bakery", 3, 9, 120, 111))
+        self.assertTrue(row["further_pages"])  # page 3 offered a fourth page that was not requested
+        self.assertEqual((view["metrics"]["reviewers"], view["coverage"]["reviewers_with_history"]), (9, 2))
+        self.assertEqual(view["metrics"]["pairs_sharing_two"], 1)
+        self.assertEqual(view["coverage"]["history_windows"]["retrieved"], 2)
+        all_pages = self.run_collect(4)
+        row = build_view(build_graph(all_pages.parsed), INVESTIGATION)["coverage"]["business_rows"][0]
+        self.assertEqual((row["pages"], row["captured"], row["further_pages"]), (4, 12, False))
+
+    def test_unexpected_error_on_a_later_page_keeps_earlier_pages(self):
+        original, calls = self.api.search, {"n": 0}
+
+        def flaky(params):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError(f"boom {BUSINESS}")
+            return original(params)
+
+        result = collect(BUSINESS, 2, 10, flaky, self.api.is_cached, None, DEFAULT_HISTORY_LIMIT, 3)
+        self.assertEqual((result.pages_collected, len(result.parsed), result.histories_collected), (1, 1, 0))
+        self.assertEqual(result.stopped, "Collection stopped because of an unexpected error.")
+
+    def test_response_for_the_wrong_page_is_rejected(self):
+        original = self.api.respond
+
+        def wrong_page(params):
+            response = original(params)
+            if "next_page_token" in params:
+                response["search_parameters"]["next_page_token"] = "PRIVATE-TOKEN-9"
+            return response
+
+        self.api.respond = wrong_page
+        result = self.run_collect(3)
+        self.assertEqual(result.pages_collected, 1)
+        self.assertIn("could not be used", result.stopped)
+
+    def test_token_validation_and_request_shape(self):
+        self.assertEqual(review_page_params(BUSINESS), {"engine": "google_maps_reviews", "data_id": BUSINESS, "hl": "en"})
+        self.assertEqual(
+            review_page_params(BUSINESS, "abc"),
+            {"engine": "google_maps_reviews", "data_id": BUSINESS, "hl": "en", "next_page_token": "abc"},
+        )
+        self.assertNotEqual(cache_key(review_page_params(BUSINESS)), cache_key(review_page_params(BUSINESS, "abc")))
+        for good in ("CAESBkVnSUlDZw==", "abc-DEF_123", "a.b~c:d/e+f%3D"):
+            self.assertTrue(usable_page_token(good))
+        for bad in ("", " ", "a b", "a\nb", "a&next=1", "a?b", "a#b", None, 5, ["a"], "x" * 2049):
+            self.assertFalse(usable_page_token(bad), bad)
+
+
+class MultiPagePlanningTests(unittest.TestCase):
+    def setUp(self):
+        self.api = FakeSerpApi()
+        self.api.review_pages, self.api.more_after_last = FOUR_PAGES, False
+        self.state = new_state(self.api)
+        self.ref = self.state.run_search(self.state.plan_search("bakery in testville")["plan"])["businesses"][0]["ref"]
+
+    def run_plan(self, plan):
+        started = self.state.start_investigation(plan["plan"])
+        self.state._investigations[started["investigation"]].thread.join(timeout=10)
+        return self.state.investigation_status(started["investigation"])
+
+    def test_page_count_is_validated_and_defaults_to_one(self):
+        for bad in (0, 5, -1, "2", 2.0, True, [2]):
+            with self.subTest(pages=bad):
+                with self.assertRaises(live.LiveError) as ctx:
+                    self.state.plan_investigation(self.ref, 1, None, bad)
+                self.assertEqual(ctx.exception.status, 400)
+        self.assertEqual(self.state.plan_investigation(self.ref, 1)["pages"], 1)
+        info = self.state.session_info()
+        self.assertEqual((info["default_review_pages"], info["max_review_pages"]), (1, 4))
+        self.assertEqual(self.api.new_requests, 1)  # only the search
+
+    def test_budget_examples_for_one_to_four_pages(self):
+        for pages, histories, expected in ((1, 3, 4), (2, 3, 5), (3, 3, 6), (4, 3, 7), (4, 8, 12), (4, 0, 4)):
+            with self.subTest(pages=pages, histories=histories):
+                plan = self.state.plan_investigation(self.ref, histories, None, pages)
+                self.assertEqual((plan["max_requests"], plan["pages"]), (expected, pages))
+                self.assertIn(f"At most {expected} SerpApi requests", plan["statement"])
+                if pages > 1:
+                    self.assertIn(f"up to {pages} for review pages", plan["statement"])
+                    self.assertIn("only if the previous response provides a next-page token, so fewer pages may be retrieved than asked for", plan["statement"])
+        self.assertEqual(self.api.new_requests, 1)
+
+    def test_plan_grammar_for_one_and_several_saved_pages(self):
+        self.run_plan(self.state.plan_investigation(self.ref, 0, None, 1))  # saves the first page only
+        one = self.state.plan_investigation(self.ref, 0, None, 2)["statement"]
+        self.assertIn("up to 1 for review pages (the first of 2 is already saved)", one)
+        self.assertNotIn("the first 1 of 2 are", one)
+        self.run_plan(self.state.plan_investigation(self.ref, 0, None, 2))  # saves the second
+        several = self.state.plan_investigation(self.ref, 0, None, 4)["statement"]
+        self.assertIn("(the first 2 of 4 are already saved)", several)
+
+    def test_one_page_plan_wording_is_unchanged(self):
+        statement = self.state.plan_investigation(self.ref, 2)["statement"]
+        self.assertTrue(statement.startswith("At most 3 SerpApi requests (3 credits): 1 for the first page of reviews and up to 2 for reviewer histories."))
+
+    def test_execution_never_exceeds_the_planned_maximum(self):
+        status = self.run_plan(self.state.plan_investigation(self.ref, 2, None, 3))
+        self.assertEqual((status["state"], status["max_requests"], status["requests_sent"]), ("complete", 5, 5))
+        self.assertEqual((status["pages_requested"], status["pages_collected"], status["more_pages"]), (3, 3, True))
+        self.assertEqual(status["page_statement"], "3 of 3 review pages requested were collected. The service provided a token for a further page, which was not used.")
+        self.assertEqual(status["view"]["coverage"]["page_statement"], status["page_statement"])
+        self.assertEqual(status["view"]["metrics"]["reviewers"], 9)
+
+    def test_fewer_pages_exist_than_requested(self):
+        self.api.review_pages = FOUR_PAGES[:2]
+        plan = self.state.plan_investigation(self.ref, 1, None, 4)
+        self.assertEqual(plan["max_requests"], 5)
+        status = self.run_plan(plan)
+        self.assertEqual((status["state"], status["requests_sent"], status["pages_collected"], status["more_pages"]), ("complete", 3, 2, False))
+        self.assertIn("collection stopped before the requested page limit", status["page_statement"])
+        # Now everything is saved, the plan knows only two pages can be collected.
+        again = self.state.plan_investigation(self.ref, 1, None, 4)
+        self.assertEqual(again["max_requests"], 0)
+        self.assertIn("Only 2 of the 4 requested review pages can be collected", again["statement"])
+
+    def test_saved_pages_make_the_plan_exact_or_narrow_it(self):
+        self.run_plan(self.state.plan_investigation(self.ref, 0, None, 2))  # saves pages 1 and 2
+        sent = self.api.new_requests
+        open_plan = self.state.plan_investigation(self.ref, 2, None, 4)
+        self.assertEqual(open_plan["max_requests"], 4)  # 2 further pages + 2 histories
+        self.assertIn("up to 2 for review pages (the first 2 of 4 are already saved)", open_plan["statement"])
+        exact = self.state.plan_investigation(self.ref, 2, None, 2)
+        self.assertEqual(exact["max_requests"], 2)
+        self.assertIn("The 2 review pages and 0 of 2 reviewer histories are already saved", exact["statement"])
+        self.assertEqual(self.api.new_requests, sent)  # planning sent nothing
+        status = self.run_plan(exact)
+        self.assertEqual((status["requests_sent"], status["saved_responses_used"]), (2, 2))
+        self.assertEqual(self.state.plan_investigation(self.ref, 2, None, 2)["max_requests"], 0)
+
+    def test_failure_on_a_later_page_gives_a_truthful_partial_result(self):
+        plan = self.state.plan_investigation(self.ref, 2, None, 3)
+        self.api.fail_new_request_number = self.api.new_requests + 2
+        self.api.error = SerpApiError(f"SerpApi error (HTTP 400): expired token PRIVATE-TOKEN-2 for {BUSINESS}")
+        status = self.run_plan(plan)
+        self.assertEqual((status["state"], status["pages_collected"], status["histories_collected"]), ("partial", 1, 0))
+        self.assertEqual(status["stopped"], "SerpApi rejected the request (HTTP 400).")
+        self.assertIn("Collection stopped before the remaining pages were requested", status["page_statement"])
+        self.assertEqual(status["view"]["coverage"]["business_rows"][0]["pages"], 1)
+        for private in PRIVATE + ["expired token"]:
+            self.assertNotIn(private, json.dumps(status))
+
+    def test_status_and_view_never_contain_tokens_or_identifiers(self):
+        status = self.run_plan(self.state.plan_investigation(self.ref, 3, None, 4))
+        self.assertEqual((status["pages_collected"], status["more_pages"]), (4, False))
+        text = json.dumps(status)
+        for private in PRIVATE + ["next_page_token", "review-page-"]:
+            self.assertNotIn(private, text)
 
 
 class LiveHttpTests(unittest.TestCase):
@@ -570,7 +935,10 @@ class LiveHttpTests(unittest.TestCase):
         self.assertEqual((status, len(found["businesses"]), self.api.new_requests), (200, 2, 1))
 
         self.assertEqual(self.post("/api/investigations/plan", {"business": found["businesses"][0]["ref"], "histories": 2, "history_limit": 500})[0], 400)
+        for bad_pages in (0, 5, "2"):
+            self.assertEqual(self.post("/api/investigations/plan", {"business": found["businesses"][0]["ref"], "histories": 2, "pages": bad_pages})[0], 400)
         status, plan = self.post("/api/investigations/plan", {"business": found["businesses"][0]["ref"], "histories": 2, "history_limit": 20})
+        self.assertEqual(plan["pages"], 1)
         self.assertEqual((status, plan["max_requests"], plan["business"], self.api.new_requests), (200, 3, "Alpha Bakery", 1))
         self.assertEqual(plan["history_limit"], 20)
         status, started = self.post("/api/investigations", {"plan": plan["plan"]})

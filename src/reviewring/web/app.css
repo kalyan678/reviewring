@@ -233,6 +233,7 @@ legend { font-weight: 600; padding: 0 0.25rem; }
 .confirm p { flex: 1 1 100%; font-weight: 600; }
 .error { border-left: 4px solid #d03b3b; padding: 0.6rem 0.8rem; margin: 0.75rem 0; background: var(--warn-bg); }
 .progress { margin: 0.75rem 0; font-weight: 600; }
+.expansion { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 0.25rem; }
 #assessment { margin: 0 0 0.75rem; }
 
 .foot { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem 2rem; color: var(--text-2); font-size: 0.875rem; display: grid; gap: 0.25rem; }

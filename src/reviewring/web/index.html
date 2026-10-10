@@ -64,6 +64,22 @@
       <p id="live-error" class="error" role="alert" hidden></p>
       <p id="progress" class="progress" role="status" hidden></p>
       <div id="live-summary" class="callout" hidden></div>
+
+      <div id="expansion" class="expansion" hidden>
+        <h3>Second stage: expand to shared businesses</h3>
+        <p id="expansion-statement" class="muted"></p>
+        <form id="expansion-form" class="row" hidden>
+          <label for="expansion-count" id="expansion-count-label">Shared businesses to expand</label>
+          <input id="expansion-count" name="expansion-count" type="number" min="1" max="2" value="1" required>
+          <button type="submit">Check cost</button>
+        </form>
+        <div id="expansion-result" hidden>
+          <h3>What expansion added</h3>
+          <ul id="expansion-findings" class="points"></ul>
+          <h3>What this does not show</h3>
+          <ul id="expansion-limits" class="points"></ul>
+        </div>
+      </div>
     </section>
 
     <section id="state" class="card state" hidden></section>

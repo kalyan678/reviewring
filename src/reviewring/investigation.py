@@ -40,6 +40,10 @@ MAX_HISTORIES = 8
 DEFAULT_REVIEW_PAGES = 1
 MAX_REVIEW_PAGES = 4
 
+# Ring expansion: first review pages of businesses shared within an observed
+# repeated overlap. A separate, separately confirmed action; never recursive.
+MAX_EXPANSION_BUSINESSES = 2
+
 # A next-page token is opaque. It is only checked for a plausible form before
 # being sent back, so that a malformed value is never forwarded.
 _PAGE_TOKEN = re.compile(r"[A-Za-z0-9_\-=+/.%:~]{1,2048}")
@@ -217,6 +221,51 @@ def page_statement(collection: Collection) -> str:
     return f"{text} {TOKEN_NOT_USED}"
 
 
+def _budgeted_fetch(result: Collection, max_requests: int, search: Search, is_cached: IsCached) -> Search:
+    """A fetch that counts saved responses and new requests, refusing new ones beyond the budget."""
+
+    def fetch(params: dict[str, Any]) -> dict[str, Any]:
+        if is_cached(params):
+            result.cache_hits += 1
+        else:
+            if result.requests_sent >= max_requests:
+                raise RequestBudgetExhausted
+            result.requests_sent += 1
+        return search(params)
+
+    return fetch
+
+
+def expand(
+    data_ids: list[str],
+    max_requests: int,
+    search: Search,
+    is_cached: IsCached,
+    first_number: int = 1,
+) -> Collection:
+    """Collect the first review page of each given business, and nothing else.
+
+    No further pages, no contributor histories, and nothing for businesses or
+    reviewers discovered on the new pages: expansion is one hop. At most
+    ``MAX_EXPANSION_BUSINESSES`` businesses and ``max_requests`` new requests.
+    Stops at the first failure, keeping the pages already collected; never
+    raises and never retries.
+    """
+    data_ids = list(dict.fromkeys(data_ids))[:MAX_EXPANSION_BUSINESSES]
+    result = Collection(pages_requested=len(data_ids))
+    fetch = _budgeted_fetch(result, max_requests, search, is_cached)
+    try:
+        for offset, data_id in enumerate(data_ids):
+            page = parse_maps_reviews(fetch(review_page_params(data_id)), f"expansion-page-{first_number + offset}")
+            if page.page is None or page.page.business_id != data_id or page.page.request_token is not None:
+                raise ParseError("response is for a different business or page")
+            result.parsed.append(page)
+            result.pages_collected += 1
+    except Exception as error:  # noqa: BLE001
+        result.stopped = describe_error(error)
+    return result
+
+
 def collect(
     data_id: str,
     histories: int,
@@ -239,15 +288,7 @@ def collect(
     """
     pages = min(max(pages, 1), MAX_REVIEW_PAGES)
     result = Collection(pages_requested=pages)
-
-    def fetch(params: dict[str, Any]) -> dict[str, Any]:
-        if is_cached(params):
-            result.cache_hits += 1
-        else:
-            if result.requests_sent >= max_requests:
-                raise RequestBudgetExhausted
-            result.requests_sent += 1
-        return search(params)
+    fetch = _budgeted_fetch(result, max_requests, search, is_cached)
 
     def report() -> None:
         if on_progress is not None:

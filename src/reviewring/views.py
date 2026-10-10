@@ -16,6 +16,7 @@ or probability, and its wording never asserts wrongdoing.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,7 @@ def _plural(count: int, noun: str) -> str:
 
 
 def _business_labels(
-    coverage: list[BusinessCoverage], names: dict[str, str] | None, titles: dict[str, str]
+    coverage: list[BusinessCoverage], names: dict[str, str] | None, titles: dict[str, str], expanded: frozenset[str] = frozenset()
 ) -> dict[str, str]:
     """Display label per business: fictional name, a title the user chose from
     a public listing, or otherwise an anonymous letter."""
@@ -66,10 +67,15 @@ def _business_labels(
         key=lambda row: (-row.reviewers_from_pages, -row.review_pages, row.business_id),
     )
     letters = iter(_LETTERS)
-    return {
-        row.business_id: titles.get(row.business_id) or f"Business {next(letters, index + 1)}"
-        for index, row in enumerate(with_pages)
-    }
+    labels, expansions = {}, 0
+    for index, row in enumerate(with_pages):
+        if row.business_id in expanded:
+            # Reached through a small set of reviewers: numbered, never named.
+            expansions += 1
+            labels[row.business_id] = f"Expanded business {expansions}"
+        else:
+            labels[row.business_id] = titles.get(row.business_id) or f"Business {next(letters, index + 1)}"
+    return labels
 
 
 def _single(values: tuple[int, ...]) -> int | None:
@@ -164,7 +170,9 @@ def _history_windows(graph: Graph) -> dict[str, Any]:
     }
 
 
-def _coverage_section(graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str]) -> dict[str, Any]:
+def _coverage_section(
+    graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str], expanded: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     rows = []
     for row in coverage:
         if row.history_only:
@@ -173,6 +181,7 @@ def _coverage_section(graph: Graph, coverage: list[BusinessCoverage], labels: di
         rows.append(
             {
                 "label": labels[row.business_id],
+                "expanded": row.business_id in expanded,
                 "pages": row.review_pages,
                 "captured": row.reviewers_from_pages,
                 "reported_total": reported,
@@ -192,7 +201,10 @@ def _coverage_section(graph: Graph, coverage: list[BusinessCoverage], labels: di
     }
 
 
-def _ratings_section(graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str], groups: list[OverlapGroup]) -> dict[str, Any]:
+def _ratings_section(
+    graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str], groups: list[OverlapGroup],
+    expanded: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     rated = {pair: _edge_rating(edge) for pair, edge in graph.edges.items()}
     known = [rating for rating in rated.values() if rating is not None]
     businesses = []
@@ -212,7 +224,10 @@ def _ratings_section(graph: Graph, coverage: list[BusinessCoverage], labels: dic
         businesses.append(
             {
                 "label": labels[row.business_id],
-                "reported_rating": reported_ratings.pop() if len(reported_ratings) == 1 else None,
+                "expanded": row.business_id in expanded,
+                "reported_rating": (
+                    reported_ratings.pop() if len(reported_ratings) == 1 and row.business_id not in expanded else None
+                ),
                 "reported_total": _single(row.reported_review_totals),
                 "captured_reviews": len(captured),
                 "captured_distribution": _distribution(captured),
@@ -451,7 +466,10 @@ def _aggregated_network(graph: Graph, coverage: list[BusinessCoverage], groups: 
         reported = _single(row.reported_review_totals)
         detail = [f"{_plural(row.review_pages, 'review page')} collected."]
         if reported is None:
-            detail.append(f"{_plural(row.reviewers_from_pages, 'review')} collected; reported total unknown.")
+            detail.append(
+                f"{_plural(row.reviewers_from_pages, 'review')} collected; "
+                + ("its reported total is withheld." if labels[row.business_id].startswith("Expanded business") else "reported total unknown.")
+            )
         elif reported > row.reviewers_from_pages:
             detail.append(
                 f"{row.reviewers_from_pages} of {reported} reported reviews collected; "
@@ -644,18 +662,26 @@ def build_view(
     mode: str,
     names: dict[str, str] | None = None,
     business_titles: dict[str, str] | None = None,
+    expanded_businesses: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Everything the dashboard shows for one graph.
 
     ``names`` (a label for every node) must be None for real data.
     ``business_titles`` may name businesses the user picked from a public
     listing; it never names a reviewer, and other businesses stay anonymous.
+    ``expanded_businesses`` are businesses reached through reviewers' shared
+    histories. They are numbered, never named, and their reported review total
+    and rating are withheld, because those public figures could identify the
+    business and, through it, the few reviewers who share it.
     """
     metrics = compute_metrics(graph)
-    coverage_rows = business_coverage(graph)
-    labels = _business_labels(coverage_rows, names, business_titles or {})
+    coverage_rows = [
+        replace(row, reported_review_totals=()) if row.business_id in expanded_businesses else row
+        for row in business_coverage(graph)
+    ]
+    labels = _business_labels(coverage_rows, names, business_titles or {}, expanded_businesses)
     groups = overlap_groups(graph)
-    coverage = _coverage_section(graph, coverage_rows, labels)
+    coverage = _coverage_section(graph, coverage_rows, labels, expanded_businesses)
     indicators = _indicator_section(graph, groups, names, coverage)
     network = (
         _aggregated_network(graph, coverage_rows, groups, labels)
@@ -680,7 +706,7 @@ def build_view(
         "explanation": _explanation(mode, metrics, coverage, indicators),
         "coverage": coverage,
         "indicators": indicators,
-        "ratings": _ratings_section(graph, coverage_rows, labels, groups),
+        "ratings": _ratings_section(graph, coverage_rows, labels, groups, expanded_businesses),
         "network": network,
     }
 

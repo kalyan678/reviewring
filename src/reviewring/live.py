@@ -22,11 +22,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from reviewring import serpapi_client
-from reviewring.graph import build_graph
+from reviewring.graph import build_graph, compute_metrics
+from reviewring.indicators import MIN_SHARED_BUSINESSES, expansion_candidates
 from reviewring.investigation import (
     DEFAULT_HISTORIES,
     DEFAULT_HISTORY_LIMIT,
     DEFAULT_REVIEW_PAGES,
+    MAX_EXPANSION_BUSINESSES,
     MAX_HISTORIES,
     MAX_HISTORY_LIMIT,
     MAX_REVIEW_PAGES,
@@ -38,6 +40,7 @@ from reviewring.investigation import (
     choose_reviewers,
     collect,
     describe_error,
+    expand,
     history_params,
     merge_review_pages,
     page_statement,
@@ -85,6 +88,13 @@ class _Investigation:
     history_limit: int = DEFAULT_HISTORY_LIMIT
     view: dict[str, Any] | None = None
     thread: threading.Thread | None = None
+    business: dict[str, str] = field(default_factory=dict)  # data_id and title; never sent to the browser
+    # Ring expansion (a separate, separately confirmed stage).
+    expansion_pages: list[ParsedResponse] = field(default_factory=list)
+    expanded_ids: list[str] = field(default_factory=list)
+    expansions: list[Collection] = field(default_factory=list)
+    before_expansion: dict[str, int] = field(default_factory=dict)  # metrics of the original investigation
+    activity: str = "collecting"  # what a running state is doing: "collecting" or "expanding"
 
 
 def _text(value: Any) -> str | None:
@@ -355,6 +365,7 @@ class LiveState:
         plan = self._take_plan(plan_id, "investigation")
         business, histories = plan.payload["business"], plan.payload["histories"]
         investigation = _Investigation(business["title"], plan.max_requests, histories)
+        investigation.business = dict(business)
         investigation.collection.pages_requested = plan.payload["pages"]
         investigation.history_limit = plan.payload["history_limit"]
         investigation_id = secrets.token_urlsafe(16)
@@ -383,13 +394,7 @@ class LiveState:
                     investigation.state = "failed"
                     return
                 try:
-                    view = build_view(
-                        build_graph(collection.parsed),
-                        INVESTIGATION,
-                        business_titles={business["data_id"]: business["title"]},
-                    )
-                    view["coverage"]["page_statement"] = page_statement(collection)
-                    investigation.view = view
+                    investigation.view = self._investigation_view(investigation)
                 except Exception:  # noqa: BLE001
                     # Collection worked but the result cannot be shown. No view is
                     # offered, and exception text is never surfaced.
@@ -416,6 +421,7 @@ class LiveState:
         collection = investigation.collection
         status = {
             "state": investigation.state,
+            "activity": investigation.activity,
             "business": investigation.title,
             "max_requests": investigation.max_requests,
             "requests_sent": collection.requests_sent,
@@ -433,4 +439,214 @@ class LiveState:
         }
         if investigation.state != "running" and investigation.view is not None:
             status["view"] = investigation.view
+        if investigation.state != "running":
+            status["expansion"] = self._expansion_info(investigation)
         return status
+
+    # ---------- ring expansion ----------
+
+    def _investigation_view(self, investigation: _Investigation) -> dict[str, Any]:
+        """The aggregate view of everything collected: the investigation plus any expansion pages."""
+        business = investigation.business
+        view = build_view(
+            build_graph(investigation.collection.parsed + investigation.expansion_pages),
+            INVESTIGATION,
+            business_titles={business["data_id"]: business["title"]},
+            expanded_businesses=frozenset(investigation.expanded_ids),
+        )
+        view["coverage"]["page_statement"] = page_statement(investigation.collection)
+        return view
+
+    def _candidates(self, investigation: _Investigation) -> list[str]:
+        return expansion_candidates(build_graph(investigation.collection.parsed + investigation.expansion_pages))
+
+    def _expansion_info(self, investigation: _Investigation) -> dict[str, Any]:
+        """What the browser may know about expansion: availability, cost limits, and aggregate findings.
+
+        Never which businesses qualify or were expanded: they are shared by a
+        small set of reviewers, so the server chooses them and does not list them.
+        """
+        info: dict[str, Any] = {
+            "available": False,
+            "max_businesses": 0,
+            "performed": len(investigation.expanded_ids),
+            "last": None,
+            "findings": [],
+            "limits": [],
+        }
+        if investigation.state not in ("complete", "partial") or not investigation.collection.parsed:
+            info["statement"] = "Expansion is not available because this investigation did not produce a result."
+            return info
+        candidates = self._candidates(investigation)
+        histories = investigation.collection.histories_collected
+        if candidates:
+            # How many qualify is not disclosed: the limit offered is the fixed
+            # per-action maximum, whatever the number of candidates.
+            info.update(available=True, max_businesses=MAX_EXPANSION_BUSINESSES)
+            info["statement"] = (
+                "Expansion is available. At least one pair of reviewers with retrieved histories shares "
+                f"{MIN_SHARED_BUSINESSES} or more businesses, so the first review page of up to "
+                f"{MAX_EXPANSION_BUSINESSES} businesses listed in both of their histories can be collected, one "
+                "request each. The server chooses which by a fixed rule and does not list them or say how many "
+                "qualify, because they are shared by a small set of reviewers. A shared business is not "
+                "evidence that reviews were arranged."
+            )
+        elif histories < 2:
+            info["statement"] = (
+                "Expansion is not available: it needs at least two reviewers with a retrieved history, and "
+                f"{'none was' if histories == 0 else 'only 1 was'} retrieved."
+            )
+        elif investigation.expanded_ids:
+            info["statement"] = "No further business qualifies for expansion."
+        else:
+            info["statement"] = (
+                "Expansion is not available. No business qualifies: it must be listed in the retrieved "
+                f"histories of both reviewers in a pair that shares at least {MIN_SHARED_BUSINESSES} "
+                "businesses, and have no review page collected yet. This is a valid outcome and is not a "
+                "finding that no overlap exists."
+            )
+        if investigation.expansions:
+            last = investigation.expansions[-1]
+            info["last"] = {
+                "state": "failed" if not last.parsed else "partial" if last.stopped else "complete",
+                "businesses_requested": last.pages_requested,
+                "businesses_collected": last.pages_collected,
+                "requests_sent": last.requests_sent,
+                "saved_responses_used": last.cache_hits,
+                "stopped": last.stopped,
+            }
+        if investigation.expansion_pages:
+            graph = build_graph(investigation.collection.parsed + investigation.expansion_pages)
+            metrics = compute_metrics(graph)
+            before = investigation.before_expansion
+            earlier = {o.reviewer_id for parsed in investigation.collection.parsed for o in parsed.observations}
+            seen_again = len(earlier & {o.reviewer_id for page in investigation.expansion_pages for o in page.observations})
+            pages = len(investigation.expansion_pages)
+            reviews = sum(len(page.observations) for page in investigation.expansion_pages)
+            again = (
+                "None of the reviewers already in this investigation appears"
+                if seen_again == 0
+                else "Fewer than 5 of the reviewers already in this investigation appear"
+                if seen_again < 5
+                else f"{seen_again} of the reviewers already in this investigation appear"
+            )
+            info["findings"] = [
+                f"{pages} shared business{'' if pages == 1 else 'es'} {'was' if pages == 1 else 'were'} expanded, "
+                f"each by its first review page: {reviews} review{'' if reviews == 1 else 's'} collected.",
+                f"Reviewers in the investigation: {before['reviewers']} before expansion, {metrics.reviewers} after.",
+                f"{again} on the newly collected page{'' if pages == 1 else 's'}.",
+                f"Reviewer pairs sharing {MIN_SHARED_BUSINESSES} or more businesses: {before['pairs']} before "
+                f"expansion, {metrics.reviewer_pairs_sharing_two_or_more} after.",
+            ]
+            info["limits"] = [
+                "A reviewer appearing on a newly collected page shows that they reviewed that business. It does "
+                "not show that reviews were arranged.",
+                "The counts after expansion are higher because more was collected. The increase describes what "
+                "was retrieved, not a change in anyone's behaviour.",
+                "Only the first review page of each expanded business was collected, so reviewers who are not "
+                "on it were not seen.",
+                "No review histories were collected for reviewers first seen during expansion, so overlap among "
+                "them was not assessed.",
+                "Which businesses were expanded is not shown, and their reported review totals and ratings are "
+                "withheld. This limits what is disclosed about the reviewers who share them; it does not make "
+                "those reviewers anonymous.",
+            ]
+        return info
+
+    def plan_expansion(self, investigation_id: Any, businesses: Any) -> dict[str, Any]:
+        with self._lock:
+            investigation = self._investigations.get(investigation_id) if isinstance(investigation_id, str) else None
+            running = self._running
+        if investigation is None:
+            raise LiveError(404, "That investigation is not available. Start a new one.")
+        if running or investigation.state == "running":
+            raise LiveError(409, "Wait for the running collection to finish.")
+        if investigation.state not in ("complete", "partial") or not investigation.collection.parsed:
+            raise LiveError(409, "Expansion is not available because this investigation did not produce a result.")
+        if isinstance(businesses, bool) or not isinstance(businesses, int) or not 1 <= businesses <= MAX_EXPANSION_BUSINESSES:
+            raise LiveError(400, f"Choose 1 to {MAX_EXPANSION_BUSINESSES} businesses to expand.")
+        candidates = self._candidates(investigation)
+        if not candidates:
+            raise LiveError(409, self._expansion_info(investigation)["statement"])
+        chosen = candidates[:businesses]
+        new = sum(1 for data_id in chosen if not self._is_cached(review_page_params(data_id)))
+        with self._lock:
+            remaining = PROCESS_REQUEST_CEILING - self._requests_attempted
+        if new > remaining:
+            raise LiveError(
+                409,
+                f"This could need {new} new requests, more than the {remaining} this server may still send "
+                "before its safety limit. Restart the server to continue.",
+            )
+        # The cost is exact, because it is what the user confirms. Why it may be
+        # lower than asked for (fewer qualify, or pages are saved) is not broken down.
+        if new == 0:
+            cost = "No SerpApi request: nothing new needs to be requested for this expansion."
+        else:
+            cost = f"At most {new} SerpApi request{'s' if new != 1 else ''} ({new} credit{'s' if new != 1 else ''})."
+        statement = (
+            f"{cost} Expansion collects the first review page of up to {businesses} shared "
+            f"business{'' if businesses == 1 else 'es'} chosen by the server. Fewer are collected if fewer "
+            "qualify, and a page already saved on this computer costs nothing. It requests no reviewer "
+            "histories and no further pages, and it does not continue to other businesses afterwards."
+        )
+        plan_id = self._add_plan("expansion", new, {"investigation": investigation_id, "candidates": chosen})
+        return {"plan": plan_id, "businesses": businesses, "max_requests": new, "statement": statement}
+
+    def start_expansion(self, plan_id: Any, investigation_id: Any) -> dict[str, Any]:
+        with self._lock:
+            if self._running:
+                raise LiveError(409, "Wait for the running collection to finish.")
+        plan = self._take_plan(plan_id, "expansion")
+        if plan.payload["investigation"] != investigation_id:
+            raise LiveError(409, "This confirmation is not valid. Check the cost again.")
+        with self._lock:
+            investigation = self._investigations.get(investigation_id)
+        candidates = plan.payload["candidates"]
+        # The plan must still describe what would be collected.
+        if investigation is None or investigation.state not in ("complete", "partial") or candidates != self._candidates(investigation)[: len(candidates)]:
+            raise LiveError(409, "This confirmation is not valid. Check the cost again.")
+        with self._lock:
+            if self._running:
+                raise LiveError(409, "Wait for the running collection to finish.")
+            self._running = True
+        resting_state = investigation.state
+        if not investigation.before_expansion:
+            metrics = compute_metrics(build_graph(investigation.collection.parsed))
+            investigation.before_expansion = {"reviewers": metrics.reviewers, "pairs": metrics.reviewer_pairs_sharing_two_or_more}
+        investigation.activity = "expanding"
+        investigation.state = "running"
+
+        def run() -> None:
+            added: list[ParsedResponse] = []
+            try:
+                result = expand(
+                    candidates, plan.max_requests, self._guarded_search, self._is_cached,
+                    first_number=len(investigation.expansion_pages) + 1,
+                )
+                added = result.parsed
+                if added:
+                    investigation.expansion_pages.extend(added)
+                    investigation.expanded_ids.extend(page.page.business_id for page in added)
+                    try:
+                        investigation.view = self._investigation_view(investigation)
+                    except Exception:  # noqa: BLE001
+                        # Keep the investigation exactly as it was before this expansion.
+                        del investigation.expansion_pages[-len(added):]
+                        del investigation.expanded_ids[-len(added):]
+                        result.parsed = []
+                        result.pages_collected = 0
+                        result.stopped = "The expansion result could not be displayed, so it was not added."
+                investigation.expansions.append(result)
+            except Exception:  # noqa: BLE001
+                failed = Collection(pages_requested=len(candidates))
+                failed.stopped = "Collection stopped because of an unexpected error."
+                investigation.expansions.append(failed)
+            finally:
+                investigation.state = resting_state
+                with self._lock:
+                    self._running = False
+
+        investigation.thread = threading.Thread(target=run, daemon=True)
+        investigation.thread.start()
+        return {"investigation": investigation_id}

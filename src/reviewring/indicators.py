@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from itertools import combinations
 
 from reviewring.graph import Graph
+from reviewring.models import CONTRIBUTOR_REVIEWS_ENGINE
 
 MIN_SHARED_BUSINESSES = 2
 
@@ -79,3 +80,42 @@ def overlap_groups(graph: Graph, minimum: int = MIN_SHARED_BUSINESSES) -> list[O
             )
         )
     return sorted(groups, key=lambda group: (-len(group.reviewers), group.reviewers))
+
+
+def expansion_candidates(graph: Graph, minimum: int = MIN_SHARED_BUSINESSES) -> list[str]:
+    """Businesses whose review page is worth collecting next, in a fixed order.
+
+    A business qualifies when all of these hold:
+
+    - it has no collected review page yet, so it is known only from histories;
+    - two reviewers with a retrieved history both list it in that history;
+    - those two reviewers are an overlapping pair under the product's own rule:
+      they share at least ``minimum`` businesses, counted from observations only.
+
+    A shared business counts toward the pair only where an observation supports
+    it for both reviewers (a review page or a history entry); nothing is assumed
+    because a reviewer was reached through some business. A business that two
+    reviewers share without the pair reaching ``minimum``, or that only one
+    retrieved history lists, does not qualify. Qualifying is a reason to look,
+    never evidence that reviews were arranged.
+
+    Order: most supporting reviewer pairs first, then by identifier, so the
+    choice is deterministic and uses nothing about review content.
+    """
+    with_history = set(graph.histories)
+    paged = set(graph.pages)
+    in_history = {
+        pair
+        for pair, edge in graph.edges.items()
+        if pair[0] in with_history
+        and any(o.source.engine == CONTRIBUTOR_REVIEWS_ENGINE for o in edge.observations)
+    }
+    support: Counter[str] = Counter()
+    for pair in shared_business_pairs(graph, minimum):
+        first, second = pair.reviewers
+        if first not in with_history or second not in with_history:
+            continue
+        for business_id in pair.businesses:
+            if business_id not in paged and (first, business_id) in in_history and (second, business_id) in in_history:
+                support[business_id] += 1
+    return [business_id for business_id, _ in sorted(support.items(), key=lambda item: (-item[1], item[0]))]

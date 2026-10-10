@@ -196,6 +196,17 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("history_limit, pages }", script)
         self.assertIn("c.page_statement", script)
 
+    def test_expansion_is_a_separate_form_with_its_own_cost_check(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        self.assertIn('id="expansion-form"', html)
+        self.assertIn('id="expansion-count" name="expansion-count" type="number" min="1" max="2" value="1"', html)
+        self.assertIn('post("/api/expansions/plan", { investigation, businesses })', script)
+        self.assertIn('post("/api/expansions", { plan: plan.plan, investigation })', script)
+        # Expansion goes through the same confirmation prompt; nothing is sent from the plan step.
+        self.assertRegex(script, r"expansions/plan[\s\S]{0,120}askConfirm\(plan")
+        self.assertIn("expansion.findings", script)
+        self.assertIn("expansion.limits", script)
+
     def test_synthetic_mode_is_conspicuously_labelled(self):
         self.assertIn("SYNTHETIC DEMO", self.sources["app.js"])
         self.assertIn("fictional", self.sources["app.js"])

@@ -184,6 +184,7 @@ function renderCoverage(view) {
     let note = `${plural(row.pages, "review page")} collected.`;
     if (row.not_collected) note += ` ${row.not_collected} reported reviews not collected.`;
     if (row.further_pages) note += " A token for a further page was provided and not used.";
+    if (row.expanded) note = "Collected by expansion: first review page only. Its reported total is withheld.";
     parts.push(meter(row.label, row.captured, row.reported_total, note));
   }
   if (c.page_statement) parts.push(el("p", { class: "muted" }, c.page_statement));
@@ -291,8 +292,8 @@ function renderRatings(view) {
       const row = el("tr");
       row.append(
         el("td", {}, b.label),
-        el("td", { class: "num" }, b.reported_rating === null ? "not reported" : String(b.reported_rating)),
-        el("td", { class: "num" }, b.reported_total === null ? "not reported" : String(b.reported_total)),
+        el("td", { class: "num" }, b.expanded ? "withheld" : b.reported_rating === null ? "not reported" : String(b.reported_rating)),
+        el("td", { class: "num" }, b.expanded ? "withheld" : b.reported_total === null ? "not reported" : String(b.reported_total)),
         el("td", { class: "num" }, String(b.captured_reviews)),
         el("td", {}, b.captured_distribution.map((d) => `${d.count} x ${d.rating} star`).join(", ") || "none")
       );
@@ -479,6 +480,7 @@ function renderNetwork(view) {
 let session = null; // { token, key_configured, default_histories, max_histories }; memory only
 let pending = null; // the action waiting for confirmation
 let investigationView = null; // last finished investigation, kept while the page is open
+let investigationId = null; // opaque reference to it, for the separate expansion stage
 let busy = false;
 let focusNext = null; // element to focus once controls are enabled again
 
@@ -574,10 +576,26 @@ function showResults(businesses) {
 }
 
 function progressText(status) {
+  if (status.activity === "expanding") return "Expanding: collecting the first review page of the selected shared businesses.";
   return `Collecting: ${status.pages_collected} of ${plural(status.pages_requested, "review page")} so far, ` +
     `${plural(status.requests_sent, "new request")} sent of at most ${status.max_requests}, ` +
     `${plural(status.saved_responses_used, "saved response")} reused, ` +
     `${status.histories_collected} of ${status.histories_planned || status.histories_requested} reviewer histories collected.`;
+}
+
+function renderExpansion(expansion) {
+  $("expansion").hidden = !expansion;
+  if (!expansion) return;
+  $("expansion-statement").textContent = expansion.statement;
+  $("expansion-form").hidden = !expansion.available;
+  if (expansion.available) {
+    $("expansion-count").max = String(expansion.max_businesses);
+    $("expansion-count").value = "1";
+    $("expansion-count-label").textContent = `Shared businesses to expand (1 to ${expansion.max_businesses})`;
+  }
+  $("expansion-result").hidden = !expansion.findings.length;
+  replace($("expansion-findings"), ...expansion.findings.map((line) => el("li", {}, line)));
+  replace($("expansion-limits"), ...expansion.limits.map((line) => el("li", {}, line)));
 }
 
 function finishInvestigation(status) {
@@ -595,8 +613,16 @@ function finishInvestigation(status) {
     lines.push(`${plural(status.responses_collected, "response")} collected and saved on this computer, but the result could not be displayed, so no summary is shown.${status.stopped ? ` Collection also stopped early: ${status.stopped}` : ""}`);
   }
   if (status.histories_collected) lines.push(`Up to ${status.history_limit} entries were requested per history; see Coverage for how complete the retrieved histories appear.`);
+  const last = status.expansion && status.expansion.last;
+  if (last) {
+    let line = `Expansion: ${plural(last.requests_sent, "new SerpApi request")} sent, ${plural(last.saved_responses_used, "saved response")} reused, ${last.businesses_collected} of ${plural(last.businesses_requested, "business", "businesses")} collected.`;
+    if (last.state === "partial") line += ` Stopped early: ${last.stopped} The pages collected before that were added.`;
+    if (last.state === "failed") line += ` Nothing was added: ${last.stopped} The investigation above is unchanged.`;
+    lines.push(line);
+  }
   replace($("live-summary"), ...lines.map((line) => el("p", {}, line)));
   $("live-summary").hidden = false;
+  renderExpansion(status.expansion);
   if (status.view) {
     investigationView = status.view;
     if (modeFromHash() === "investigate") show(status.view);
@@ -638,9 +664,28 @@ $("results-form").addEventListener("submit", (event) => {
     askConfirm(plan, async () => {
       $("live-summary").hidden = true;
       $("dashboard").hidden = true;
+      $("expansion").hidden = true;
       const started = await post("/api/investigations", { plan: plan.plan });
+      investigationId = started.investigation;
       $("progress").textContent = "Collecting: starting.";
       await follow(started.investigation);
+    });
+  });
+});
+
+// Expansion is a separate action with its own cost check and confirmation.
+$("expansion-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (busy || !session || !investigationId) return;
+  closeConfirm();
+  const businesses = Number.parseInt($("expansion-count").value, 10);
+  const investigation = investigationId;
+  guarded(async () => {
+    const plan = await post("/api/expansions/plan", { investigation, businesses });
+    askConfirm(plan, async () => {
+      await post("/api/expansions", { plan: plan.plan, investigation });
+      $("progress").textContent = "Expanding: starting.";
+      await follow(investigation);
     });
   });
 });

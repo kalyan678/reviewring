@@ -184,6 +184,8 @@ def make_handler(raw_dir: Path, live: LiveState) -> type[BaseHTTPRequestHandler]
                     body.get("business"), body.get("histories"), body.get("history_limit"), body.get("pages")
                 ),
                 "/api/investigations": lambda body: live.start_investigation(body.get("plan")),
+                "/api/expansions/plan": lambda body: live.plan_expansion(body.get("investigation"), body.get("businesses")),
+                "/api/expansions": lambda body: live.start_expansion(body.get("plan"), body.get("investigation")),
             }
             action = actions.get(urlsplit(self.path).path)
             if action is None:

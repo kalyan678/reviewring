@@ -135,7 +135,7 @@ A local dashboard over the graph foundation. It adds no second graph model and n
 
 Status: implemented. Validated against the real service through the dashboard: one business search, one first review page, two default reviewer histories, and one history with a 50-entry limit. Multi-page review collection, the revised reviewer selection, and overlap detection on overlapping data have been tested only against a simulated SerpApi.
 
-One bounded investigation: Google Maps Search, then up to four pages of Google Maps Reviews for the chosen business, then Contributor Reviews for a chosen number of the reviewers on those pages. No requests for businesses found in histories, no recursion.
+One bounded investigation: Google Maps Search, then up to four pages of Google Maps Reviews for the chosen business, then Contributor Reviews for a chosen number of the reviewers on those pages. The investigation itself sends no request for a business found in a history; that is the separate, separately confirmed expansion stage described below. Nothing is recursive.
 
 | Module | Responsibility |
 |---|---|
@@ -155,6 +155,8 @@ Responses are parsed by the existing parsers and merged by `build_graph`, then s
 | `POST /api/investigations/plan` | Validate a selection; state the maximum cost | No |
 | `POST /api/investigations` | Start a planned investigation in the background | At most 1 + histories |
 | `GET /api/investigations/{id}` | Progress, then the aggregate result | No |
+| `POST /api/expansions/plan` | Validate an expansion of a finished investigation; state the maximum cost | No |
+| `POST /api/expansions` | Run a planned expansion in the background | At most 2 |
 
 ### Request budget
 
@@ -191,6 +193,44 @@ A retrieved history is a window onto a reviewer's reviews, and the code never tr
   - *apparently complete*: nothing observed says more exists.
   A missing next-page marker is never taken as completeness. Reported totals are approximate, so a difference of one is ignored.
 - **What the page shows:** counts of retrieved histories by status, the entry limit, entries retrieved, and the share of the reported reviews they cover. With fewer than five histories the share is given only as a coarse band and the reported total is withheld, since reported counts are reviewer-level data.
+
+### One-hop expansion (second stage)
+
+Status: implemented and tested against a simulated SerpApi only. No qualifying business has been observed in real data, so the stage has never run against the real service.
+
+Expansion collects the first Google Maps Reviews page of businesses that the retrieved histories share. It is never part of `collect`; it runs only from its own plan, after an investigation has finished as *complete* or *partial*.
+
+**Eligibility** (`indicators.expansion_candidates`). Expansion uses the product's own overlap rule, a reviewer pair sharing at least `MIN_SHARED_BUSINESSES` (2) businesses, and adds nothing stricter. A business is a candidate when all of these hold:
+
+- it is listed in the retrieved Contributor Reviews histories of both reviewers of a pair (a link seen only on a review page does not make a business a candidate);
+- that pair shares at least `MIN_SHARED_BUSINESSES` businesses, counted from observations of any kind;
+- it has a business identifier in the graph and no review page collected for it.
+
+The investigated business usually supplies one of the two shared businesses, because the reviewers whose histories are retrieved were observed on its review page. It counts only through those observations: the function reads edges, and nothing is assumed for a reviewer the graph does not show on that business. Two histories that share one business, with no other observed business in common, do not make a candidate. A business listed in only one retrieved history is never a candidate, since the second reviewer's link to it would be unobserved.
+
+The consequence is stated plainly in the README: within one investigation, any further business that two retrieved histories share qualifies. That is the agreed definition, and it is why a candidate is described as a reason to look and never as evidence. Candidates are ordered by the number of supporting reviewer pairs, then by identifier, so selection is deterministic. An empty list is a normal result, and the status explains which condition was not met.
+
+**Selection stays in the server.** The browser sends an investigation reference and a count (1 or 2). The status tells it only whether expansion is available, with the fixed per-action maximum; the number of candidates is not sent in any form. Asking for two when one qualifies is valid and collects one. Candidate identifiers live only in the server-side plan. For real data the view labels expanded businesses "Expanded business N" and withholds name, category, reported rating and review total; the number of reviews collected is shown, with no total to compare it against and no statement about completeness.
+
+**Plan and execution** (`live.plan_expansion`, `live.start_expansion`, `investigation.expand`).
+
+- A plan fixes the candidate identifiers and the maximum number of new requests: one per selected business not already saved, at most `MAX_EXPANSION_BUSINESSES` (2). Every further expansion needs a new plan and a new confirmation.
+- The plan is single-use and expires like every other plan. Execution also requires the investigation reference the plan was made for, and refuses a plan whose candidates no longer match the investigation (for example after another expansion). A refused attempt consumes the plan.
+- Expansion counts against the same per-process ceiling and the same one-collection-at-a-time lock as investigations.
+- `expand` requests first pages only: no `next_page_token`, no Contributor Reviews request. A response whose echoed `data_id` differs from the one requested is rejected. It never raises.
+
+**Why it cannot recurse.** A candidate needs two reviewers with retrieved histories, and expansion retrieves no histories. Expanding can only remove candidates (a business gains a page) and never adds one.
+
+**Merging.** Expansion pages are kept apart from the original collection (`_Investigation.expansion_pages`) and the graph is rebuilt from both. Each observation carries its own source (`expansion-page-N`), so a reviewer-business link seen in a history and again on an expanded page stays one edge with two observations, and differing ratings are flagged as a conflict as elsewhere. Overlap evidence and coverage are recomputed from the merged graph under the same small-group rules. The metrics of the original investigation are recorded before the first expansion so findings can be stated as before and after.
+
+**Failure.** No retry. Pages collected before a failure are merged and the expansion is reported as partial. If nothing was collected, or the merged view cannot be built, the added pages are discarded and the investigation keeps its previous state and view.
+
+**Residual inference.** The stage limits disclosure; it does not make reviewers anonymous.
+
+- Availability says that some pair of reviewers with retrieved histories shares a further business.
+- The plan states the exact number of new requests, because that is what the user confirms. A number lower than asked for means fewer businesses qualify or a page is already saved; the statement does not say which. Hiding it would mean overstating the cost, and the result would reveal it anyway.
+- After expansion, the number of expanded businesses, the reviews on each page, and the before-and-after counts describe a small group in aggregate.
+- Whoever runs the server can read the saved responses directly.
 
 ### Security and privacy
 

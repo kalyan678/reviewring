@@ -81,6 +81,8 @@ Thirteen fictional reviewers and seven fictional businesses. Five reviewers shar
 2. Restart the dashboard and open the **Investigate** tab.
 3. **Search** for a business, **select** one from the list, and choose three things: how many review pages to collect (1 to 4, default 1), how many reviewer histories (0 to 8, default 3), and how many entries to request per history (10 to 200, default 50). Then confirm.
 
+4. **Optionally, expand.** When the result is shown, a second stage may be offered beneath it: collecting the first review page of up to two businesses that the retrieved histories share. It is a separate action with its own cost check and confirmation, described under [Second stage: expansion](#second-stage-expansion).
+
 Without a key the tab explains that one is required; nothing can be sent.
 
 **Request budget.** Each new SerpApi request uses one credit.
@@ -89,6 +91,7 @@ Without a key the tab explains that one is required; nothing can be sent.
 |---|---|
 | A search | 1 request |
 | An investigation | 1 per review page you chose + 1 per reviewer history you chose (at most 4 + 8 = 12) |
+| An expansion (optional, each time you confirm one) | 1 per business you chose to expand (at most 2) |
 | One run of the server | 30 new requests in total, then it refuses until restarted |
 
 - Before anything is sent the page states the maximum and waits for you to confirm. The server enforces that same maximum; the confirmation cannot be skipped.
@@ -103,6 +106,19 @@ Without a key the tab explains that one is required; nothing can be sent.
 - With fewer than two histories the page says coordination cannot be assessed. Otherwise, when nothing overlaps, it says "No repeated overlap observed in the retrieved review windows": only what was retrieved was compared.
 - If the result cannot be displayed, the page says so plainly and shows no summary; what was collected stays saved on your computer.
 
+### Second stage: expansion
+
+An investigation never requests any business other than the one you selected. Expansion is a second, optional step that you start yourself after the result is shown.
+
+- **What it does.** It collects the first review page of one or two businesses that appear in the retrieved reviewer histories, and merges those pages into the same result. This shows whether more of the reviewers already in the investigation, or reviewers not seen before, reviewed those businesses too.
+- **Which businesses qualify.** The same rule as the overlap indicator: a pair of reviewers sharing at least two businesses. A business qualifies when both reviewers of such a pair list it in their retrieved histories and it has no review page collected yet. The investigated business counts as one of the two only because both reviewers were actually observed on it. A business listed in only one retrieved history does not qualify, however popular it is. Qualifying is a reason to look, not evidence that anything was arranged.
+- **No qualifying business is a normal outcome.** The page then says why: fewer than two histories were retrieved, or no two retrieved histories list the same further business. This is not a finding that no overlap exists.
+- **You choose how many, not which.** These businesses are shared by a small set of reviewers, and naming them would describe those reviewers. The server picks them by a fixed rule (the business supported by the most reviewer pairs first). The page is told only whether expansion is available, never how many businesses qualify: the form always allows 1 or 2, and if fewer qualify than you ask for, fewer are collected. Expanded businesses appear as "Expanded business 1", "Expanded business 2", with name, category, reported rating and review total withheld; only the number of reviews actually collected is shown.
+- **Cost.** One request per business, at most two per confirmation. The page states the exact maximum and waits for you to confirm, exactly as for an investigation. A page already saved on your computer costs nothing. Examples: an investigation with 1 page and 3 histories is at most 4 requests; expanding one business afterwards is at most 1 more, two businesses at most 2 more. Expanding again later needs a new confirmation.
+- **It goes one step and stops.** Expansion requests no reviewer histories and no further review pages. Reviewers first seen on an expanded page have no retrieved history, so they can never make another business qualify.
+- **If a request fails,** nothing is retried. A page collected before the failure is kept and merged; if none was collected, the investigation is left exactly as it was. Either way the original result stays on screen.
+- **Reading the result.** "What expansion added" is listed apart from the original findings: reviews collected, reviewers before and after, and reviewer pairs sharing two or more businesses before and after. Higher counts after expansion mean more was collected, nothing else. Two reviewers appearing together on another business's page is an observed co-review. It is not evidence that anyone arranged it: people who live near each other or share an interest review the same places.
+
 ## What has been verified against the real service
 
 All figures are from `docs/EXPERIMENTS.md`. Eleven SerpApi requests were attempted in total; ten succeeded.
@@ -115,7 +131,7 @@ All figures are from `docs/EXPERIMENTS.md`. Eleven SerpApi requests were attempt
 
 - **The entry limit works:** one history requested with 50 entries returned 50, beginning with the same 10 as before.
 
-Not verified against the real service: collecting more than one review page through the dashboard (a second page was collected once by an experiment script, not by the dashboard), the revised reviewer selection, overlap detection on real data that contains overlap, and timeouts. These are tested against a simulated SerpApi only.
+Not verified against the real service: collecting more than one review page through the dashboard (a second page was collected once by an experiment script, not by the dashboard), the revised reviewer selection, overlap detection on real data that contains overlap, expansion to shared businesses (no qualifying business has been observed in real data), and timeouts. These are tested against a simulated SerpApi only.
 
 ## Limitations
 
@@ -123,7 +139,8 @@ Not verified against the real service: collecting more than one review page thro
 - The overlap indicator is purely structural. It cannot tell arranged reviews from ordinary shared habits, and it sees only what was collected.
 - A live investigation sees at most four pages of one business's reviews and a handful of history windows. A business two reviewers share outside those windows is not seen.
 - If a request for a later review page fails, collection stops there and no histories are requested; the pages already collected are shown.
-- No coordination score, community detection, temporal analysis, ring expansion, or adjusted rating is implemented.
+- Expansion goes one step only: the first review page of at most two shared businesses per confirmation. It does not follow those pages further, and its selection depends entirely on the few history windows retrieved. Because every reviewer in an investigation was observed on the investigated business, any second business that two retrieved histories share qualifies; that is ordinary for neighbours and regulars.
+- No coordination score, community detection, temporal analysis, or adjusted rating is implemented.
 - Investigations are kept in memory and disappear when the server stops. Their saved responses remain and then appear in the collected sample, alongside any unrelated ones.
 - Browser checks were run in one desktop browser engine.
 
@@ -133,6 +150,7 @@ Not verified against the real service: collecting more than one review page thro
 - **Collected data stays on your computer.** Raw responses go to `data/raw/` and `data/cache/`, which are git-ignored. They contain reviewer names and review text; do not commit or share them.
 - **The browser receives aggregates.** For real data it gets totals, distributions, and groups. Reviewers with the same connections are merged, and sets of fewer than five reviewers are not drawn. No reviewer is ever named. A business is named only when you selected it yourself from a search.
 - **Identifiers stay in the server process.** The page holds random references in their place. Reviewer names, profile links, review text, addresses, and coordinates are never read into the graph.
+- **Expansion does not name what it expands.** The page is told whether expansion is available, never which businesses qualify or how many. This limits disclosure about the small set of reviewers who share them; it does not make those reviewers anonymous. Availability itself says that some pair of reviewers shares a second business. The cost you confirm is exact, so a lower cost than you asked for can mean fewer qualify or a page was already saved. The result shows how many businesses were expanded and how many reviews each page held, and the saved responses on your computer hold the full detail.
 - **The server is local.** It listens on the loopback interface only, loads nothing from outside, uses no cookies or browser storage, and rejects cross-origin requests. Its only outbound traffic is the SerpApi requests you confirm.
 - **Errors are generic.** SerpApi's own error text is never shown, because it can repeat request details.
 - **Experiment inputs are private.** The business and reviewers used in the feasibility experiments are not identified here. Re-running those scripts needs your own values in an untracked `local_inputs.json` (see `local_inputs.example.json`, which is fictional).

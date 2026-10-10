@@ -27,8 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from reviewring import app, live  # noqa: E402
 from reviewring.graph import build_graph, compute_metrics  # noqa: E402
+from reviewring.indicators import expansion_candidates  # noqa: E402
 from reviewring.investigation import (  # noqa: E402
     DEFAULT_HISTORY_LIMIT,
+    expand,
     choose_reviewers,
     page_statement,
     usable_page_token,
@@ -47,6 +49,11 @@ from reviewring.serpapi_client import MissingApiKeyError, SerpApiError  # noqa: 
 BUSINESS = "0x00000000000000aa:0x00000000000000a1"
 OTHER_BUSINESS = "0x00000000000000bb:0x00000000000000b1"
 SHARED_BUSINESS = "0x00000000000000cc:0x00000000000000c1"
+# Businesses that appear only in fictional reviewer histories, for expansion tests.
+EXTRA_X = "0x00000000000000e1:0x0000000000000001"
+EXTRA_Y = "0x00000000000000e2:0x0000000000000002"
+POPULAR = "0x00000000000000e3:0x0000000000000003"
+OTHER_TITLE = "Private Other Title"
 PRIVATE_NAME = "Private Reviewer Name"
 PRIVATE_TEXT = "Private review text."
 # Reported review counts for reviewers 1-6 on the page, in page order.
@@ -80,6 +87,22 @@ class FakeSerpApi:
         self.review_pages: list[list[int]] = [FIRST_PAGE]
         self.more_after_last = True
         self.token_overrides: dict[int, object] = {}  # page index -> next token to return instead
+        # Expansion fixtures: further businesses in a reviewer's history, and the
+        # single review page of a business other than the investigated one.
+        self.history_extra: dict[int, list[str]] = {}
+        self.shared_history = True  # reviewers 2 and 3 both list one further business
+        self.history_lists_seed = True  # a history lists the investigated business itself
+        self.business_pages: dict[str, list[int]] = {}
+
+    def use_overlap_fixture(self) -> None:
+        """Reviewers 2 and 3 share three businesses beyond the investigated one; 2 and 5 share one."""
+        self.history_extra = {2: [EXTRA_X, EXTRA_Y, POPULAR], 3: [EXTRA_X, EXTRA_Y], 5: [POPULAR]}
+        self.business_pages = {
+            SHARED_BUSINESS: [2, 3, 30, 31, 32],
+            EXTRA_X: [2, 3, 5, 33, 34, 35, 36, 37],
+            EXTRA_Y: [3, 6, 38],
+            POPULAR: [2, 5, 39],
+        }
 
     def next_token(self, index: int) -> object:
         if index in self.token_overrides:
@@ -116,6 +139,22 @@ class FakeSerpApi:
                     "not-an-object",
                 ],
             }
+        if engine == "google_maps_reviews" and params.get("data_id") in self.business_pages and "next_page_token" not in params:
+            data_id = params["data_id"]
+            return {
+                "search_parameters": dict(params),
+                "place_info": {"title": OTHER_TITLE, "type": "Cafe", "reviews": 4321, "rating": 3.7},
+                "reviews": [
+                    {
+                        # The same review a history lists for this reviewer and business.
+                        "review_id": f"other-{n}" if data_id == SHARED_BUSINESS else f"rev-{n}-{data_id[-4:]}",
+                        "rating": 5.0,
+                        "snippet": PRIVATE_TEXT,
+                        "user": {"name": PRIVATE_NAME, "contributor_id": reviewer(n)},
+                    }
+                    for n in self.business_pages[data_id]
+                ],
+            }
         if engine == "google_maps_reviews":
             token = params.get("next_page_token")
             tokens: dict[object, int] = {}
@@ -132,7 +171,7 @@ class FakeSerpApi:
                         "review_id": f"page-{n}",
                         "rating": 5.0,
                         "snippet": PRIVATE_TEXT,
-                        "user": {"name": PRIVATE_NAME, "contributor_id": reviewer(n), **({"reviews": REPORTED[n]} if REPORTED[n] is not None else {})},
+                        "user": {"name": PRIVATE_NAME, "contributor_id": reviewer(n), **({"reviews": REPORTED[n]} if REPORTED.get(n) is not None else {})},
                     }
                     for n in self.review_pages[index]
                 ],
@@ -144,10 +183,12 @@ class FakeSerpApi:
                 response["serpapi_pagination"] = {"next_page_token": following}
             return response
         number = int(params["contributor_id"][-2:])
-        entries = [{"review_id": f"page-{number}", "rating": 5, "place_info": {"data_id": BUSINESS, "type": "Bakery"}}]
+        entries = [{"review_id": f"page-{number}", "rating": 5, "place_info": {"data_id": BUSINESS, "type": "Bakery"}}] if self.history_lists_seed else []
         # Reviewers 2 and 3 both also reviewed one other business.
-        other = SHARED_BUSINESS if number in (2, 3) else f"0x00000000000000dd:0x000000000000{number:04x}"
+        other = SHARED_BUSINESS if number in (2, 3) and self.shared_history else f"0x00000000000000dd:0x000000000000{number:04x}"
         entries.append({"review_id": f"other-{number}", "rating": 4, "snippet": PRIVATE_TEXT, "place_info": {"data_id": other, "type": "Cafe"}})
+        for extra in self.history_extra.get(number, []):
+            entries.append({"review_id": f"rev-{number}-{extra[-4:]}", "rating": 5, "snippet": PRIVATE_TEXT, "place_info": {"data_id": extra, "type": "Gym"}})
         return {"search_parameters": dict(params), "contributor": {"name": PRIVATE_NAME}, "reviews": entries}
 
 
@@ -155,7 +196,7 @@ def new_state(fake: FakeSerpApi) -> live.LiveState:
     return live.LiveState(search=fake.search, is_cached=fake.is_cached, key_configured=lambda: fake.key_configured)
 
 
-PRIVATE = [BUSINESS, OTHER_BUSINESS, SHARED_BUSINESS, "10000000000000000", PRIVATE_NAME, PRIVATE_TEXT, "PRIVATE-TOKEN", "page-2", "other-2", "0x0000"]
+PRIVATE = [BUSINESS, OTHER_BUSINESS, SHARED_BUSINESS, "10000000000000000", PRIVATE_NAME, PRIVATE_TEXT, "PRIVATE-TOKEN", "page-2", "other-2", "0x0000", OTHER_TITLE, "4321", "3.7", "rev-2-"]
 
 
 class CollectionTests(unittest.TestCase):
@@ -894,6 +935,395 @@ class MultiPagePlanningTests(unittest.TestCase):
             self.assertNotIn(private, text)
 
 
+class ExpansionCandidateTests(unittest.TestCase):
+    """Which businesses qualify for expansion, and the bounded collection itself."""
+
+    def setUp(self):
+        self.api = FakeSerpApi()
+        self.api.use_overlap_fixture()
+
+    def graph(self, histories):
+        return build_graph(collect(BUSINESS, histories, 20, self.api.search, self.api.is_cached).parsed)
+
+    def test_candidates_are_history_businesses_within_a_repeated_overlap(self):
+        # Histories for reviewers 2 and 3: they share the investigated business and three others.
+        self.assertEqual(expansion_candidates(self.graph(2)), [SHARED_BUSINESS, EXTRA_X, EXTRA_Y])
+        self.assertEqual(expansion_candidates(self.graph(2)), expansion_candidates(self.graph(2)))
+
+    def test_a_pair_sharing_exactly_two_businesses_yields_one_candidate(self):
+        plain = FakeSerpApi()  # reviewers 2 and 3 share the investigated business and one other
+        graph = build_graph(collect(BUSINESS, 2, 20, plain.search, plain.is_cached).parsed)
+        self.assertEqual(expansion_candidates(graph), [SHARED_BUSINESS])
+        # With reviewer 5's history retrieved too, the pair 2 and 5 shares exactly two as well.
+        self.assertEqual(expansion_candidates(self.graph(3)), [SHARED_BUSINESS, EXTRA_X, EXTRA_Y, POPULAR])
+
+    def test_a_shared_business_without_an_overlapping_history_pair_is_not_eligible(self):
+        api = FakeSerpApi()
+        api.shared_history = False
+        api.history_extra = {2: [POPULAR], 5: [POPULAR]}
+        # Reviewer 5 lists it too, but only reviewers 2 and 3 have a retrieved history.
+        two = collect(BUSINESS, 2, 20, api.search, api.is_cached).parsed
+        self.assertEqual(expansion_candidates(build_graph(two)), [])
+        # Listed in one retrieved history only.
+        api.history_extra = {2: [POPULAR]}
+        self.assertEqual(expansion_candidates(build_graph(collect(BUSINESS, 3, 20, api.search, api.is_cached).parsed)), [])
+
+    def test_the_investigated_business_counts_only_where_it_is_observed(self):
+        api = FakeSerpApi()
+        api.shared_history, api.history_lists_seed = False, False
+        api.history_extra = {2: [POPULAR], 5: [POPULAR]}
+        parsed = collect(BUSINESS, 3, 20, api.search, api.is_cached).parsed
+        histories = [p for p in parsed if p.history is not None]
+        self.assertEqual(len(histories), 3)
+        # Histories alone: the two reviewers share one observed business. The investigated
+        # business is not assumed for them, so they are not an overlapping pair.
+        self.assertEqual(expansion_candidates(build_graph(histories)), [])
+        # With the review page that shows both of them, the pair shares two observed businesses.
+        self.assertEqual(expansion_candidates(build_graph(parsed)), [POPULAR])
+
+    def test_no_candidates_without_two_histories_or_any_shared_history_business(self):
+        self.assertEqual(expansion_candidates(self.graph(0)), [])
+        self.assertEqual(expansion_candidates(self.graph(1)), [])
+        apart = FakeSerpApi()
+        apart.shared_history = False  # every history lists a different second business
+        self.assertEqual(expansion_candidates(build_graph(collect(BUSINESS, 3, 20, apart.search, apart.is_cached).parsed)), [])
+
+    def test_a_business_with_a_collected_page_is_never_a_candidate(self):
+        graph = self.graph(2)
+        self.assertNotIn(BUSINESS, expansion_candidates(graph))
+        pages = expand([SHARED_BUSINESS], 1, self.api.search, self.api.is_cached).parsed
+        graph = build_graph(collect(BUSINESS, 2, 20, self.api.search, self.api.is_cached).parsed + pages)
+        self.assertEqual(expansion_candidates(graph), [EXTRA_X, EXTRA_Y])
+
+    def test_expand_collects_first_pages_only_within_budget(self):
+        before = len(self.api.calls)
+        result = expand([EXTRA_X, EXTRA_Y, SHARED_BUSINESS, EXTRA_X], 5, self.api.search, self.api.is_cached)
+        calls = self.api.calls[before:]
+        # At most two businesses, one first page each, no histories, no tokens.
+        self.assertEqual(calls, [review_page_params(EXTRA_X), review_page_params(EXTRA_Y)])
+        self.assertEqual((result.pages_requested, result.pages_collected, result.requests_sent, result.stopped), (2, 2, 2, None))
+        self.assertEqual([p.source_file for p in result.parsed], ["expansion-page-1", "expansion-page-2"])
+        limited = expand([SHARED_BUSINESS, POPULAR], 1, self.api.search, self.api.is_cached)
+        self.assertEqual((limited.pages_collected, limited.requests_sent), (1, 1))
+        self.assertIn("budget", limited.stopped)
+
+    def test_expand_keeps_the_first_page_when_the_second_fails_and_never_raises(self):
+        self.api.fail_new_request_number = self.api.new_requests + 2
+        result = expand([EXTRA_X, EXTRA_Y], 2, self.api.search, self.api.is_cached)
+        self.assertEqual((result.pages_collected, len(result.parsed)), (1, 1))
+        self.assertIn("failed or timed out", result.stopped)
+        broken = expand([EXTRA_X], 1, lambda params: (_ for _ in ()).throw(RuntimeError(EXTRA_X)), lambda params: False)
+        self.assertEqual((broken.parsed, broken.stopped), ([], "Collection stopped because of an unexpected error."))
+
+    def test_expand_rejects_a_response_for_another_business(self):
+        original = self.api.respond
+        self.api.respond = lambda params: original({**params, "data_id": EXTRA_Y})
+        result = expand([EXTRA_X], 1, self.api.search, self.api.is_cached)
+        self.assertEqual(result.parsed, [])
+        self.assertIn("could not be used", result.stopped)
+
+
+class ExpansionWorkflowTests(unittest.TestCase):
+    """Expansion as a separate, confirmed, bounded second stage."""
+
+    def setUp(self):
+        self.api = FakeSerpApi()
+        self.api.use_overlap_fixture()
+        self.state = new_state(self.api)
+
+    def investigate(self, histories=2, business=0):
+        ref = self.state.run_search(self.state.plan_search("bakery in testville")["plan"])["businesses"][business]["ref"]
+        started = self.state.start_investigation(self.state.plan_investigation(ref, histories)["plan"])
+        self.wait(started["investigation"])
+        return started["investigation"]
+
+    def wait(self, investigation_id):
+        self.state._investigations[investigation_id].thread.join(timeout=10)
+
+    def run_expansion(self, investigation_id, businesses):
+        plan = self.state.plan_expansion(investigation_id, businesses)
+        self.state.start_expansion(plan["plan"], investigation_id)
+        self.wait(investigation_id)
+        return plan, self.state.investigation_status(investigation_id)
+
+    def assert_error(self, status, call, *args):
+        with self.assertRaises(live.LiveError) as ctx:
+            call(*args)
+        self.assertEqual(ctx.exception.status, status)
+        for private in PRIVATE:
+            self.assertNotIn(private, ctx.exception.message)
+
+    def expansion_calls(self, since):
+        return self.api.calls[since:]
+
+    def test_expansion_never_runs_as_part_of_the_investigation(self):
+        investigation = self.investigate()
+        self.assertEqual({c.get("data_id") for c in self.api.calls if c["engine"] == "google_maps_reviews"}, {BUSINESS})
+        status = self.state.investigation_status(investigation)
+        expansion = status["expansion"]
+        self.assertEqual((expansion["available"], expansion["performed"], expansion["last"], expansion["findings"]), (True, 0, None, []))
+        self.assertEqual(expansion["max_businesses"], 2)
+        self.assertNotIn("eligible", expansion)
+        self.assertIn("or say how many qualify", expansion["statement"])
+        self.assertIn("A shared business is not evidence that reviews were arranged.", expansion["statement"])
+        self.assertIn("The server chooses which by a fixed rule and does not list them", expansion["statement"])
+        self.assertEqual(status["activity"], "collecting")
+
+    def test_no_eligible_candidates_is_explained_as_a_valid_outcome(self):
+        self.api.history_extra, self.api.shared_history = {}, False
+        investigation = self.investigate()
+        sent = self.api.new_requests
+        expansion = self.state.investigation_status(investigation)["expansion"]
+        self.assertEqual((expansion["available"], expansion["max_businesses"]), (False, 0))
+        self.assertIn("No business qualifies", expansion["statement"])
+        self.assertIn("both reviewers in a pair that shares at least 2 businesses", expansion["statement"])
+        self.assertIn("is not a finding that no overlap exists", expansion["statement"])
+        self.assert_error(409, self.state.plan_expansion, investigation, 1)
+        none = self.state.investigation_status(self.investigate(histories=0, business=1))["expansion"]
+        self.assertIn("needs at least two reviewers with a retrieved history, and none was retrieved", none["statement"])
+        self.assertEqual(self.api.new_requests, sent + 1)  # only the second investigation's review page
+
+    def test_plan_is_validated_and_states_the_exact_cost(self):
+        investigation = self.investigate()
+        sent = self.api.new_requests
+        for bad in (0, 3, -1, "1", 1.0, True, None, [1]):
+            with self.subTest(businesses=bad):
+                self.assert_error(400, self.state.plan_expansion, investigation, bad)
+        for missing in ("unknown", None, 5):
+            self.assert_error(404, self.state.plan_expansion, missing, 1)
+        one = self.state.plan_expansion(investigation, 1)
+        self.assertEqual((one["businesses"], one["max_requests"]), (1, 1))
+        self.assertTrue(one["statement"].startswith("At most 1 SerpApi request (1 credit)."))
+        two = self.state.plan_expansion(investigation, 2)
+        self.assertEqual((two["businesses"], two["max_requests"]), (2, 2))
+        self.assertIn("At most 2 SerpApi requests (2 credits).", two["statement"])
+        self.assertIn("requests no reviewer histories and no further pages", two["statement"])
+        self.assertEqual(set(two), {"plan", "businesses", "max_requests", "statement"})
+        self.assertEqual(self.api.new_requests, sent)  # planning sends nothing
+
+    def test_expanding_two_businesses_merges_them_and_reassesses_the_evidence(self):
+        investigation = self.investigate()
+        before_view = self.state.investigation_status(investigation)["view"]
+        calls_before, sent = len(self.api.calls), self.api.new_requests
+        plan, status = self.run_expansion(investigation, 2)
+
+        # Exactly the two planned first pages; no histories, tokens, or other businesses.
+        self.assertEqual(self.expansion_calls(calls_before), [review_page_params(SHARED_BUSINESS), review_page_params(EXTRA_X)])
+        self.assertEqual(self.api.new_requests - sent, plan["max_requests"])
+        self.assertEqual((status["state"], status["activity"]), ("complete", "expanding"))
+        expansion = status["expansion"]
+        self.assertEqual(expansion["last"], {
+            "state": "complete", "businesses_requested": 2, "businesses_collected": 2,
+            "requests_sent": 2, "saved_responses_used": 0, "stopped": None,
+        })
+        self.assertEqual(expansion["performed"], 2)
+        self.assertEqual(expansion["findings"], [
+            "2 shared businesses were expanded, each by its first review page: 13 reviews collected.",
+            "Reviewers in the investigation: 6 before expansion, 14 after.",
+            "Fewer than 5 of the reviewers already in this investigation appear on the newly collected pages.",
+            "Reviewer pairs sharing 2 or more businesses: 1 before expansion, 3 after.",
+        ])
+        limits = " ".join(expansion["limits"])
+        for needed in ("does not show that reviews were arranged", "Only the first review page", "was not assessed", "does not make those reviewers anonymous", "because more was collected"):
+            self.assertIn(needed, limits)
+
+        view = status["view"]
+        self.assertEqual((before_view["metrics"]["reviewers"], before_view["metrics"]["pairs_sharing_two"]), (6, 1))
+        self.assertEqual((view["metrics"]["reviewers"], view["metrics"]["pairs_sharing_two"]), (14, 3))
+        # Reviewer-business links are not duplicated: 13 before, plus 9 links not seen before on the two pages.
+        self.assertEqual((before_view["metrics"]["edges"], view["metrics"]["edges"]), (13, 22))
+        rows = view["coverage"]["business_rows"]
+        self.assertEqual([r["label"] for r in rows], ["Alpha Bakery", "Expanded business 1", "Expanded business 2"])
+        self.assertEqual([(r["expanded"], r["reported_total"], r["not_collected"]) for r in rows], [(False, 120, 114), (True, None, None), (True, None, None)])
+        # Nothing claims an expanded business is fully covered, or implies cause or wrongdoing.
+        text = json.dumps([status["expansion"], rows, view["ratings"]]).lower()
+        for claim in ("all reviews", "fully collected", "100%", "fraud", "fake", "suspicious", "caused", "ring member"):
+            self.assertNotIn(claim, text)
+        self.assertEqual(sorted(r["captured"] for r in rows[1:]), [5, 8])
+        self.assertEqual([(b["expanded"], b["reported_rating"], b["reported_total"]) for b in view["ratings"]["businesses"]], [(False, 4.5, 120), (True, None, None), (True, None, None)])
+        # History-only businesses left: the third shared one and reviewer 2's single-shared one.
+        self.assertEqual(view["coverage"]["history_only_businesses"], 2)
+        # Still a small set of reviewers: nothing about the group is described.
+        self.assertEqual((view["indicators"]["groups"], view["indicators"]["evidence"]["reviewers_involved"]), ([], None))
+
+    def test_expansion_deduplicates_links_and_keeps_provenance(self):
+        investigation = self.investigate()
+        self.run_expansion(investigation, 2)
+        record = self.state._investigations[investigation]
+        graph = build_graph(record.collection.parsed + record.expansion_pages)
+        edge = graph.edges[(reviewer(2), SHARED_BUSINESS)]
+        self.assertEqual(sorted(o.source.file for o in edge.observations), ["expansion-page-1", "history-1"])
+        self.assertEqual((edge.review_ids, edge.conflicts), ({"other-2"}, ("rating",)))  # 4 in the history, 5 on the page
+        self.assertEqual(len([pair for pair in graph.edges if pair[1] == EXTRA_X]), 8)
+        self.assertEqual(sorted(graph.pages), sorted([BUSINESS, SHARED_BUSINESS, EXTRA_X]))
+        self.assertEqual(record.expanded_ids, [SHARED_BUSINESS, EXTRA_X])
+
+    def test_browser_never_learns_which_businesses_or_reviewers_are_involved(self):
+        investigation = self.investigate()
+        plan = self.state.plan_expansion(investigation, 2)
+        self.state.start_expansion(plan["plan"], investigation)
+        self.wait(investigation)
+        text = json.dumps(self.state.investigation_status(investigation)) + json.dumps({k: v for k, v in plan.items() if k != "plan"})
+        for private in PRIVATE + [EXTRA_X, EXTRA_Y, POPULAR, "candidates", "expanded_ids", "expansion-page", "Cafe", "Gym"]:
+            self.assertNotIn(private, text)
+
+    def test_a_pair_sharing_exactly_two_businesses_can_be_expanded_once(self):
+        api = FakeSerpApi()  # reviewers 2 and 3 share the investigated business and one other
+        api.business_pages = {SHARED_BUSINESS: [2, 3, 30]}
+        self.api, self.state = api, new_state(api)
+        investigation = self.investigate()
+        expansion = self.state.investigation_status(investigation)["expansion"]
+        # Availability and the fixed maximum only: not that a single business qualifies.
+        self.assertEqual((expansion["available"], expansion["max_businesses"]), (True, 2))
+        sent = api.new_requests
+        plan = self.state.plan_expansion(investigation, 2)
+        self.assertEqual((plan["businesses"], plan["max_requests"]), (2, 1))
+        self.assertIn("up to 2 shared businesses", plan["statement"])
+        self.assertIn("Fewer are collected if fewer qualify", plan["statement"])
+        self.state.start_expansion(plan["plan"], investigation)
+        self.wait(investigation)
+        status = self.state.investigation_status(investigation)
+        self.assertEqual((api.new_requests - sent, status["expansion"]["last"]["businesses_collected"]), (1, 1))
+        self.assertEqual(api.calls[-1], review_page_params(SHARED_BUSINESS))
+        self.assertEqual((status["expansion"]["available"], status["expansion"]["statement"]), (False, "No further business qualifies for expansion."))
+        # The shared business is now a collected page, no longer a history-only observation.
+        self.assertEqual(status["view"]["coverage"]["history_only_businesses"], 0)
+        self.assertEqual([r["label"] for r in status["view"]["coverage"]["business_rows"]], ["Alpha Bakery", "Expanded business 1"])
+
+    def test_one_business_then_the_rest_and_saved_pages_cost_nothing(self):
+        investigation = self.investigate()
+        sent = self.api.new_requests
+        _, status = self.run_expansion(investigation, 1)
+        self.assertEqual((self.api.new_requests - sent, status["expansion"]["performed"]), (1, 1))
+        self.assertEqual((status["expansion"]["available"], status["expansion"]["max_businesses"]), (True, 2))
+        self.assertIn("1 shared business was expanded", status["expansion"]["findings"][0])
+        self.api.saved.add(key(review_page_params(EXTRA_X)))  # one of the two remaining pages is already saved
+        plan = self.state.plan_expansion(investigation, 2)
+        self.assertEqual(plan["max_requests"], 1)
+        self.assertTrue(plan["statement"].startswith("At most 1 SerpApi request (1 credit). Expansion collects the first review page of up to 2 shared businesses"))
+        self.assertIn("a page already saved on this computer costs nothing", plan["statement"])
+        self.state.start_expansion(plan["plan"], investigation)
+        self.wait(investigation)
+        status = self.state.investigation_status(investigation)
+        self.assertEqual((self.api.new_requests - sent, status["expansion"]["last"]["saved_responses_used"]), (2, 1))
+        # Nothing further qualifies, and nothing recursive happened.
+        self.assertEqual((status["expansion"]["available"], status["expansion"]["statement"]), (False, "No further business qualifies for expansion."))
+        self.assert_error(409, self.state.plan_expansion, investigation, 1)
+        self.assertEqual(status["expansion"]["performed"], 3)
+
+    def test_expansion_is_one_hop_and_requests_nothing_else(self):
+        investigation = self.investigate()
+        calls_before = len(self.api.calls)
+        self.run_expansion(investigation, 2)
+        self.run_expansion(investigation, 1)
+        calls = self.expansion_calls(calls_before)
+        self.assertEqual([c["engine"] for c in calls], ["google_maps_reviews"] * 3)
+        self.assertTrue(all("next_page_token" not in c and "contributor_id" not in c for c in calls))
+        self.assertEqual({c["data_id"] for c in calls}, {SHARED_BUSINESS, EXTRA_X, EXTRA_Y})
+        # Reviewers first seen during expansion have no history, so they create no new candidate.
+        self.assertEqual(self.state._candidates(self.state._investigations[investigation]), [])
+        self.assertNotIn(POPULAR, {c.get("data_id") for c in self.api.calls})
+
+    def test_plans_are_single_use_and_cannot_be_forged_or_moved(self):
+        first = self.investigate()
+        second = self.investigate(histories=2, business=1)
+        sent = self.api.new_requests
+        for bad in (None, "", "forged", 7):
+            self.assert_error(409, self.state.start_expansion, bad, first)
+        search_plan = self.state.plan_search("another bakery")["plan"]
+        self.assert_error(409, self.state.start_expansion, search_plan, first)  # wrong kind
+        plan = self.state.plan_expansion(first, 1)["plan"]
+        self.assert_error(409, self.state.start_expansion, plan, second)  # another investigation
+        self.assert_error(409, self.state.start_expansion, plan, first)  # consumed by the refused attempt
+        plan = self.state.plan_expansion(first, 1)["plan"]
+        with mock.patch.object(live.time, "monotonic", return_value=live.time.monotonic() + live.PLAN_LIFETIME_SECONDS + 1):
+            self.assert_error(409, self.state.start_expansion, plan, first)
+        expansion_plan = self.state.plan_expansion(first, 1)["plan"]
+        self.assert_error(409, self.state.start_investigation, expansion_plan)  # not an investigation plan
+        self.assertEqual(self.api.new_requests, sent)
+        plan = self.state.plan_expansion(first, 1)["plan"]
+        self.state.start_expansion(plan, first)
+        self.wait(first)
+        self.assert_error(409, self.state.start_expansion, plan, first)  # reuse
+        self.assertEqual(self.api.new_requests, sent + 1)
+
+    def test_a_plan_made_before_another_expansion_is_stale(self):
+        investigation = self.investigate()
+        stale = self.state.plan_expansion(investigation, 2)["plan"]
+        self.run_expansion(investigation, 2)
+        sent = self.api.new_requests
+        self.assert_error(409, self.state.start_expansion, stale, investigation)
+        self.assertEqual(self.api.new_requests, sent)
+
+    def test_failed_second_request_keeps_the_first_page_and_the_investigation(self):
+        investigation = self.investigate()
+        plan = self.state.plan_expansion(investigation, 2)
+        self.api.fail_new_request_number = self.api.new_requests + 2
+        self.api.error = SerpApiError(f"SerpApi error (HTTP 429): limit reached for {EXTRA_X}")
+        self.state.start_expansion(plan["plan"], investigation)
+        self.wait(investigation)
+        status = self.state.investigation_status(investigation)
+        self.assertEqual(status["state"], "complete")  # the investigation itself is unaffected
+        self.assertEqual(status["expansion"]["last"], {
+            "state": "partial", "businesses_requested": 2, "businesses_collected": 1,
+            "requests_sent": 2, "saved_responses_used": 0, "stopped": "SerpApi rejected the request (HTTP 429).",
+        })
+        self.assertEqual([r["label"] for r in status["view"]["coverage"]["business_rows"]], ["Alpha Bakery", "Expanded business 1"])
+        self.assertIn("1 shared business was expanded", status["expansion"]["findings"][0])
+        self.assertTrue(status["expansion"]["available"])  # the rest can be planned again, with a new confirmation
+        for private in PRIVATE:
+            self.assertNotIn(private, json.dumps(status))
+
+    def test_failed_first_request_leaves_the_investigation_exactly_as_it_was(self):
+        investigation = self.investigate()
+        before = self.state.investigation_status(investigation)
+        plan = self.state.plan_expansion(investigation, 2)
+        self.api.fail_new_request_number = self.api.new_requests + 1
+        self.state.start_expansion(plan["plan"], investigation)
+        self.wait(investigation)
+        after = self.state.investigation_status(investigation)
+        self.assertEqual(after["view"], before["view"])
+        self.assertEqual((after["state"], after["expansion"]["performed"], after["expansion"]["findings"]), ("complete", 0, []))
+        self.assertEqual((after["expansion"]["last"]["state"], after["expansion"]["last"]["businesses_collected"]), ("failed", 0))
+        self.assertEqual(self.api.new_requests, plan["max_requests"] - 1 + before["requests_sent"] + 1)  # one attempt, no retry
+        self.assertTrue(after["expansion"]["available"])
+        self.assertFalse(self.state._running)
+
+    def test_an_expansion_that_cannot_be_displayed_is_not_added(self):
+        investigation = self.investigate()
+        before = self.state.investigation_status(investigation)["view"]
+        plan = self.state.plan_expansion(investigation, 1)
+        with mock.patch.object(live, "build_view", side_effect=KeyError(EXTRA_X)):
+            self.state.start_expansion(plan["plan"], investigation)
+            self.wait(investigation)
+        status = self.state.investigation_status(investigation)
+        self.assertEqual((status["state"], status["view"]), ("complete", before))
+        self.assertEqual((status["expansion"]["performed"], status["expansion"]["last"]["state"]), (0, "failed"))
+        self.assertEqual(status["expansion"]["last"]["stopped"], "The expansion result could not be displayed, so it was not added.")
+        self.assertEqual(self.state._investigations[investigation].expansion_pages, [])
+
+    def test_expansion_respects_the_running_lock_and_the_server_ceiling(self):
+        investigation = self.investigate()
+        plan = self.state.plan_expansion(investigation, 1)
+        self.state._running = True
+        self.assert_error(409, self.state.plan_expansion, investigation, 1)
+        self.assert_error(409, self.state.start_expansion, plan["plan"], investigation)
+        self.state._running = False
+        with mock.patch.object(live, "PROCESS_REQUEST_CEILING", self.state._requests_attempted + 1):
+            self.assert_error(409, self.state.plan_expansion, investigation, 2)
+            self.assertEqual(self.state.plan_expansion(investigation, 1)["max_requests"], 1)
+
+    def test_a_failed_investigation_cannot_be_expanded(self):
+        ref = self.state.run_search(self.state.plan_search("bakery in testville")["plan"])["businesses"][0]["ref"]
+        plan = self.state.plan_investigation(ref, 2)
+        self.api.fail_new_request_number = self.api.new_requests + 1
+        started = self.state.start_investigation(plan["plan"])
+        self.wait(started["investigation"])
+        status = self.state.investigation_status(started["investigation"])
+        self.assertEqual((status["state"], status["expansion"]["available"]), ("failed", False))
+        self.assert_error(409, self.state.plan_expansion, started["investigation"], 1)
+
+
 class LiveHttpTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -953,8 +1383,33 @@ class LiveHttpTests(unittest.TestCase):
         for private in PRIVATE + ["api_key"]:
             self.assertNotIn(private, text)
 
+    def test_expansion_over_http_is_a_separately_confirmed_stage(self):
+        self.api.use_overlap_fixture()
+        _, plan = self.post("/api/search/plan", {"query": "bakery in testville"})
+        _, found = self.post("/api/search", {"plan": plan["plan"]})
+        _, plan = self.post("/api/investigations/plan", {"business": found["businesses"][0]["ref"], "histories": 2})
+        _, started = self.post("/api/investigations", {"plan": plan["plan"]})
+        investigation = started["investigation"]
+        self.state._investigations[investigation].thread.join(timeout=10)
+        sent = self.api.new_requests
+
+        self.assertEqual(self.post("/api/expansions/plan", {"investigation": investigation, "businesses": 3})[0], 400)
+        self.assertEqual(self.post("/api/expansions/plan", {"investigation": "unknown", "businesses": 1})[0], 404)
+        self.assertEqual(self.post("/api/expansions", {"plan": "forged", "investigation": investigation})[0], 409)
+        status, plan = self.post("/api/expansions/plan", {"investigation": investigation, "businesses": 2})
+        self.assertEqual((status, plan["max_requests"], self.api.new_requests), (200, 2, sent))
+        status, _ = self.post("/api/expansions", {"plan": plan["plan"], "investigation": investigation})
+        self.assertEqual(status, 200)
+        self.state._investigations[investigation].thread.join(timeout=10)
+        status, _, text = self.call("GET", f"/api/investigations/{investigation}")
+        result = json.loads(text)
+        self.assertEqual((status, result["expansion"]["last"]["businesses_collected"], self.api.new_requests - sent), (200, 2, 2))
+        self.assertEqual(result["view"]["metrics"]["reviewers"], 14)
+        for private in PRIVATE + [EXTRA_X, "api_key"]:
+            self.assertNotIn(private, text)
+
     def test_every_spending_endpoint_refuses_requests_without_the_session_token(self):
-        for path in ("/api/search/plan", "/api/search", "/api/investigations/plan", "/api/investigations"):
+        for path in ("/api/search/plan", "/api/search", "/api/investigations/plan", "/api/investigations", "/api/expansions/plan", "/api/expansions"):
             for headers, token in (({}, False), ({app.TOKEN_HEADER: "wrong"}, False), ({app.TOKEN_HEADER: ""}, False)):
                 with self.subTest(path=path, headers=headers):
                     status, payload = self.post(path, {"query": "bakery in testville"}, headers=headers, token=token)

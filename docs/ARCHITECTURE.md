@@ -133,7 +133,7 @@ A local dashboard over the graph foundation. It adds no second graph model and n
 
 ## Live Investigation v0.1 (collection from the dashboard, implemented)
 
-Status: implemented. Validated against the real service through the dashboard: one business search, one first review page, two default reviewer histories, and one history with a 50-entry limit. Multi-page review collection, the revised reviewer selection, and overlap detection on overlapping data have been tested only against a simulated SerpApi.
+Status: implemented. Validated against the real service through the dashboard: one business search, one first review page, one second review page, two default reviewer histories, and one history with a 50-entry limit. Collection of more than two review pages, the revised reviewer selection, and overlap detection on overlapping data have been tested only against a simulated SerpApi.
 
 One bounded investigation: Google Maps Search, then up to four pages of Google Maps Reviews for the chosen business, then Contributor Reviews for a chosen number of the reviewers on those pages. The investigation itself sends no request for a business found in a history; that is the separate, separately confirmed expansion stage described below. Nothing is recursive.
 
@@ -231,6 +231,15 @@ The consequence is stated plainly in the README: within one investigation, any f
 - The plan states the exact number of new requests, because that is what the user confirms. A number lower than asked for means fewer businesses qualify or a page is already saved; the statement does not say which. Hiding it would mean overstating the cost, and the result would reveal it anyway.
 - After expansion, the number of expanded businesses, the reviews on each page, and the before-and-after counts describe a small group in aggregate.
 - Whoever runs the server can read the saved responses directly.
+
+### Expansion in the synthetic demo
+
+The synthetic demo can be expanded step by step so the whole journey can be seen without a key. It is not a second implementation:
+
+- `synthetic.synthetic_collection(steps)` applies `indicators.expansion_candidates` to the fictional collection and, per step, adds the fictional first review page of at most `MAX_EXPANSION_BUSINESSES` businesses, in the order the rule gives. A step with no candidate ends the sequence.
+- `views.synthetic_view(steps)` builds the view from the merged graph with `build_view`, and `views.expansion_summary` produces the before-and-after findings and limits. The live workflow calls the same `expansion_summary`; for fictional data it states exact counts and names the businesses, for real data it bands small counts and says the businesses are not identified.
+- `GET /api/view?mode=synthetic&expansions=N` serves a step. It is stateless and idempotent, so the same number always gives the same view. It needs no plan and no token because nothing is requested or spent: the synthetic modules do not import the SerpApi client.
+- The view marks the nodes the latest step added. Real views never carry the demo's expansion block.
 
 ### Security and privacy
 

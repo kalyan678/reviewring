@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from reviewring import synthetic  # noqa: E402
 from reviewring.graph import build_graph, compute_metrics, history_coverage  # noqa: E402
-from reviewring.indicators import overlap_groups, shared_business_pairs  # noqa: E402
+from reviewring.indicators import MAX_EXPANSION_BUSINESSES, expansion_candidates, overlap_groups, shared_business_pairs  # noqa: E402
 from reviewring.loader import SavedDataError, load_saved_graph  # noqa: E402
 from reviewring.models import (  # noqa: E402
     CONTRIBUTOR_REVIEWS_ENGINE,
@@ -34,7 +34,7 @@ from reviewring.models import (  # noqa: E402
     ReviewsPage,
     Source,
 )
-from reviewring.views import INVESTIGATION, REAL, SYNTHETIC, build_view, real_view, synthetic_view  # noqa: E402
+from reviewring.views import INVESTIGATION, REAL, SYNTHETIC, build_view, expansion_summary, real_view, synthetic_view  # noqa: E402
 
 MARKER_BUSINESS_A = "0x00000000000000aa:0x00000000000000a1"
 MARKER_BUSINESS_B = "0x00000000000000bb:0x00000000000000b1"
@@ -151,7 +151,9 @@ class SyntheticFixtureTests(unittest.TestCase):
         self.assertEqual(first.skipped, {})
         for node_id in first.reviewer_ids | first.business_ids:
             self.assertTrue(node_id.startswith("synthetic-"), node_id)
-        self.assertEqual(set(synthetic.display_names()), first.reviewer_ids | first.business_ids)
+        # Every node has a fictional label; some reviewers are only seen after expansion.
+        self.assertLess(first.reviewer_ids | first.business_ids, set(synthetic.display_names()))
+        self.assertTrue(all(name.startswith('synthetic-') for name in synthetic.display_names()))
 
     def test_fixture_contains_the_intended_overlap_pattern(self):
         groups = overlap_groups(synthetic.build_synthetic_graph())
@@ -164,6 +166,114 @@ class SyntheticFixtureTests(unittest.TestCase):
         self.assertGreater(coverage["history_only_businesses"], 0)
         self.assertLess(coverage["reviewers_with_history"], coverage["reviewers"])
         self.assertTrue(any(row["not_collected"] for row in coverage["business_rows"]))
+
+
+class SyntheticExpansionTests(unittest.TestCase):
+    """The demo's interactive expansion: the real rule, on fictional pages, with no request."""
+
+    S = staticmethod(synthetic.business_id)
+
+    def figures(self, steps):
+        view = synthetic_view(steps)
+        m = view["metrics"]
+        return (view["expansion"]["steps"], m["reviewers"], m["businesses"], m["edges"], m["pairs_sharing_two"])
+
+    def test_initial_demo_is_unchanged_and_offers_expansion(self):
+        view = synthetic_view()
+        self.assertEqual(self.figures(0), (0, 13, 7, 31, 11))
+        expansion = view["expansion"]
+        self.assertEqual(
+            (expansion["synthetic"], expansion["available"], expansion["max_businesses"], expansion["performed"]),
+            (True, True, MAX_EXPANSION_BUSINESSES, 0),
+        )
+        self.assertEqual((expansion["findings"], expansion["limits"], expansion["new_nodes"]), ([], [], []))
+        for needed in ("Quill and Ledger Tax Advisers and Lumen Yoga Loft are listed", "no request is sent and no credit is used", "With real data each page is one SerpApi request that you confirm first"):
+            self.assertIn(needed, expansion["statement"])
+        self.assertEqual(synthetic_view(), synthetic_view(0))
+
+    def test_steps_follow_the_real_eligibility_rule_in_a_fixed_order(self):
+        original, steps = synthetic.synthetic_collection(synthetic.MAX_EXPANSION_STEPS)
+        candidates = expansion_candidates(build_graph(original))
+        # Tax adviser (ten supporting pairs), yoga studio (six), grocer (one). The vet is in one history only.
+        self.assertEqual(candidates, [self.S(6), self.S(4), self.S(5)])
+        self.assertEqual([[p.page.business_id for p in step] for step in steps], [[self.S(6), self.S(4)], [self.S(5)]])
+        self.assertTrue(all(len(step) <= MAX_EXPANSION_BUSINESSES for step in steps))
+        self.assertEqual(synthetic.synthetic_collection(2)[1], steps)
+        # Each step's choice is what the rule returns for the graph as it stood before that step.
+        after_first = build_graph(original + steps[0])
+        self.assertEqual(expansion_candidates(after_first), [self.S(5)])
+        self.assertEqual(expansion_candidates(build_graph(original + steps[0] + steps[1])), [])
+
+    def test_before_and_after_figures_are_correct(self):
+        self.assertEqual(self.figures(1), (1, 17, 7, 37, 20))
+        self.assertEqual(self.figures(2), (2, 18, 7, 39, 20))
+        first = synthetic_view(1)
+        self.assertEqual(first["expansion"]["findings"], [
+            "2 shared businesses were expanded, each by its first review page: 15 reviews collected.",
+            "Reviewers in the investigation: 13 before expansion, 17 after.",
+            "5 of the reviewers already in this investigation appear on the newly collected pages.",
+            "Reviewer pairs sharing 2 or more businesses: 11 before expansion, 20 after.",
+        ])
+        # Two reviewers first seen on the expanded pages share both of them with the group.
+        self.assertEqual([g["reviewers"] for g in first["indicators"]["groups"]], [7, 2])
+        self.assertEqual(len(first["expansion"]["new_nodes"]), 6)  # four reviewers and the two businesses
+        # The second step collects the grocer's page and adds no overlapping pair: the everyday pair stays a pair.
+        second = synthetic_view(2)
+        self.assertIn("Reviewer pairs sharing 2 or more businesses: 11 before expansion, 20 after.", second["expansion"]["findings"])
+        self.assertEqual([g["reviewers"] for g in second["indicators"]["groups"]], [7, 2])
+        self.assertEqual(second["expansion"]["new_nodes"], sorted([synthetic.reviewer_id(18), self.S(5)]))
+
+    def test_expanded_pages_are_distinguished_from_history_only_businesses(self):
+        self.assertEqual([synthetic_view(n)["coverage"]["history_only_businesses"] for n in range(3)], [4, 2, 1])
+        rows = {row["label"]: row for row in synthetic_view(2)["coverage"]["business_rows"]}
+        self.assertEqual({label for label, row in rows.items() if row["expanded"]}, {"Quill and Ledger Tax Advisers", "Lumen Yoga Loft", "Fernbank Grocers"})
+        # Fictional data: expanded businesses are named and nothing about them is withheld.
+        self.assertFalse(any(row["withheld"] for row in rows.values()))
+        self.assertEqual((rows["Fernbank Grocers"]["captured"], rows["Fernbank Grocers"]["reported_total"], rows["Fernbank Grocers"]["not_collected"]), (5, 60, 55))
+        ratings = {b["label"]: b for b in synthetic_view(2)["ratings"]["businesses"]}
+        self.assertEqual((ratings["Lumen Yoga Loft"]["reported_rating"], ratings["Lumen Yoga Loft"]["withheld"]), (4.8, False))
+
+    def test_expansion_ends_and_repeats_identically(self):
+        done = synthetic_view(2)
+        self.assertEqual((done["expansion"]["available"], done["expansion"]["max_businesses"]), (False, 0))
+        self.assertIn("No further business qualifies for expansion", done["expansion"]["statement"])
+        self.assertIn("never continues from reviewers first seen on an expanded page", done["expansion"]["statement"])
+        for more in (3, synthetic.MAX_EXPANSION_STEPS):
+            self.assertEqual(synthetic_view(more), done)
+        self.assertEqual(synthetic_view(1), synthetic_view(1))
+
+    def test_no_request_is_made_and_nothing_real_is_involved(self):
+        import httpx
+        from unittest import mock
+
+        from reviewring import serpapi_client
+
+        with mock.patch.object(httpx.Client, "send", side_effect=AssertionError("outbound HTTP attempted")), \
+                mock.patch.object(serpapi_client, "search", side_effect=AssertionError("SerpApi client used")), \
+                mock.patch.dict("os.environ", {}, clear=True):
+            views = [synthetic_view(n) for n in range(synthetic.MAX_EXPANSION_STEPS + 1)]
+        for view in views:
+            self.assertEqual((view["mode"], view["synthetic"]), (SYNTHETIC, True))
+            for node in view["network"]["nodes"]:
+                self.assertTrue(node["id"].startswith("synthetic-"), node["id"])
+            self.assertTrue(all(node.startswith("synthetic-") for node in view["expansion"]["new_nodes"]))
+
+    def test_expansion_text_claims_no_wrongdoing_or_cause(self):
+        for steps in range(3):
+            expansion = synthetic_view(steps)["expansion"]
+            text = json.dumps(expansion).lower()
+            for claim in ("fraud", "fake", "suspicious", "ring member", "coordinated", "proves", "caused"):
+                self.assertNotIn(claim, text)
+        limits = " ".join(synthetic_view(1)["expansion"]["limits"])
+        for needed in ("does not show that reviews were arranged", "because more was collected", "not a change in anyone's behaviour", "This is fictional data"):
+            self.assertIn(needed, limits)
+
+    def test_summary_bands_small_counts_for_real_data_only(self):
+        original, steps = synthetic.synthetic_collection(2)
+        grocer = steps[1]  # three reviewers already seen appear on it
+        self.assertIn("Fewer than 5 of the reviewers already in this investigation appear", expansion_summary(original, grocer)["findings"][2])
+        self.assertIn("3 of the reviewers already in this investigation appear", expansion_summary(original, grocer, exact=True)["findings"][2])
+        self.assertIn("does not make those reviewers anonymous", expansion_summary(original, grocer)["limits"][-1])
 
 
 class LoaderTests(SavedDataTestCase):
@@ -759,6 +869,16 @@ class ModeIsolationTests(SavedDataTestCase):
         # Built with no directory argument at all, and equal on every call.
         self.assertEqual(synthetic_view(), synthetic_view())
         self.assertNotIn(MARKER_BUSINESS_A, json.dumps(synthetic_view()))
+
+    def test_real_view_has_no_demo_expansion_and_real_expansion_still_withholds(self):
+        self.assertNotIn("expansion", real_view(self.raw_dir))
+        graph, _ = load_saved_graph(self.raw_dir)
+        paged = sorted(graph.pages)[0]
+        view = build_view(graph, INVESTIGATION, expanded_businesses=frozenset({paged}))
+        row = next(r for r in view["coverage"]["business_rows"] if r["expanded"])
+        self.assertEqual((row["label"], row["withheld"], row["reported_total"]), ("Expanded business 1", True, None))
+        rated = next(b for b in view["ratings"]["businesses"] if b["expanded"])
+        self.assertEqual((rated["withheld"], rated["reported_rating"]), (True, None))
 
     def test_real_view_contains_nothing_from_the_synthetic_fixture(self):
         text = json.dumps(real_view(self.raw_dir))

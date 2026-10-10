@@ -26,13 +26,22 @@ from reviewring.graph import (
     HISTORY_UNKNOWN,
     BusinessCoverage,
     Graph,
+    build_graph,
     business_coverage,
     compute_metrics,
     history_coverage,
 )
-from reviewring.indicators import MIN_SHARED_BUSINESSES, OverlapGroup, overlap_groups, shared_business_pairs
+from reviewring.indicators import (
+    MAX_EXPANSION_BUSINESSES,
+    MIN_SHARED_BUSINESSES,
+    OverlapGroup,
+    expansion_candidates,
+    overlap_groups,
+    shared_business_pairs,
+)
 from reviewring.loader import RAW_DIR, SavedDataError, load_saved_graph
-from reviewring.synthetic import build_synthetic_graph, display_names
+from reviewring.models import ParsedResponse
+from reviewring.synthetic import display_names, synthetic_collection
 
 REAL = "real"
 SYNTHETIC = "synthetic"
@@ -171,7 +180,8 @@ def _history_windows(graph: Graph) -> dict[str, Any]:
 
 
 def _coverage_section(
-    graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str], expanded: frozenset[str] = frozenset()
+    graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str],
+    expanded: frozenset[str] = frozenset(), withheld: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     rows = []
     for row in coverage:
@@ -182,6 +192,7 @@ def _coverage_section(
             {
                 "label": labels[row.business_id],
                 "expanded": row.business_id in expanded,
+                "withheld": row.business_id in withheld,
                 "pages": row.review_pages,
                 "captured": row.reviewers_from_pages,
                 "reported_total": reported,
@@ -203,7 +214,7 @@ def _coverage_section(
 
 def _ratings_section(
     graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str], groups: list[OverlapGroup],
-    expanded: frozenset[str] = frozenset(),
+    expanded: frozenset[str] = frozenset(), withheld: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     rated = {pair: _edge_rating(edge) for pair, edge in graph.edges.items()}
     known = [rating for rating in rated.values() if rating is not None]
@@ -225,8 +236,9 @@ def _ratings_section(
             {
                 "label": labels[row.business_id],
                 "expanded": row.business_id in expanded,
+                "withheld": row.business_id in withheld,
                 "reported_rating": (
-                    reported_ratings.pop() if len(reported_ratings) == 1 and row.business_id not in expanded else None
+                    reported_ratings.pop() if len(reported_ratings) == 1 and row.business_id not in withheld else None
                 ),
                 "reported_total": _single(row.reported_review_totals),
                 "captured_reviews": len(captured),
@@ -663,6 +675,7 @@ def build_view(
     names: dict[str, str] | None = None,
     business_titles: dict[str, str] | None = None,
     expanded_businesses: frozenset[str] = frozenset(),
+    withhold_expanded: bool = True,
 ) -> dict[str, Any]:
     """Everything the dashboard shows for one graph.
 
@@ -673,15 +686,18 @@ def build_view(
     histories. They are numbered, never named, and their reported review total
     and rating are withheld, because those public figures could identify the
     business and, through it, the few reviewers who share it.
+    ``withhold_expanded=False`` is for fictional data only: expanded businesses
+    are then marked as expanded but shown like any other.
     """
     metrics = compute_metrics(graph)
+    withheld = expanded_businesses if withhold_expanded else frozenset()
     coverage_rows = [
-        replace(row, reported_review_totals=()) if row.business_id in expanded_businesses else row
+        replace(row, reported_review_totals=()) if row.business_id in withheld else row
         for row in business_coverage(graph)
     ]
-    labels = _business_labels(coverage_rows, names, business_titles or {}, expanded_businesses)
+    labels = _business_labels(coverage_rows, names, business_titles or {}, withheld)
     groups = overlap_groups(graph)
-    coverage = _coverage_section(graph, coverage_rows, labels, expanded_businesses)
+    coverage = _coverage_section(graph, coverage_rows, labels, expanded_businesses, withheld)
     indicators = _indicator_section(graph, groups, names, coverage)
     network = (
         _aggregated_network(graph, coverage_rows, groups, labels)
@@ -706,7 +722,7 @@ def build_view(
         "explanation": _explanation(mode, metrics, coverage, indicators),
         "coverage": coverage,
         "indicators": indicators,
-        "ratings": _ratings_section(graph, coverage_rows, labels, groups, expanded_businesses),
+        "ratings": _ratings_section(graph, coverage_rows, labels, groups, expanded_businesses, withheld),
         "network": network,
     }
 
@@ -726,6 +742,109 @@ def real_view(raw_dir: Path = RAW_DIR) -> dict[str, Any]:
     return view
 
 
-def synthetic_view() -> dict[str, Any]:
-    """Individual-level view of the fictional demo graph. Reads nothing from disk."""
-    return build_view(build_synthetic_graph(), SYNTHETIC, display_names())
+def expansion_summary(
+    original: list[ParsedResponse], pages: list[ParsedResponse], exact: bool = False
+) -> dict[str, list[str]]:
+    """What expansion pages added to a collection, and what that does not show.
+
+    Stated as before and after, from the merged graph. ``exact`` is for
+    fictional data only; for real data a small number of reviewers seen again
+    is banded and the statement says that the businesses are not identified.
+    """
+    before = compute_metrics(build_graph(original))
+    after = compute_metrics(build_graph(original + pages))
+    earlier = {o.reviewer_id for parsed in original for o in parsed.observations}
+    seen_again = len(earlier & {o.reviewer_id for page in pages for o in page.observations})
+    count = len(pages)
+    reviews = sum(len(page.observations) for page in pages)
+    again = (
+        "None of the reviewers already in this investigation appears"
+        if seen_again == 0
+        else "Fewer than 5 of the reviewers already in this investigation appear"
+        if seen_again < MIN_AGGREGATE_GROUP_SIZE and not exact
+        else f"{seen_again} of the reviewers already in this investigation appear"
+    )
+    return {
+        "findings": [
+            f"{count} shared business{'' if count == 1 else 'es'} {'was' if count == 1 else 'were'} expanded, "
+            f"each by its first review page: {reviews} review{'' if reviews == 1 else 's'} collected.",
+            f"Reviewers in the investigation: {before.reviewers} before expansion, {after.reviewers} after.",
+            f"{again} on the newly collected page{'' if count == 1 else 's'}.",
+            f"Reviewer pairs sharing {MIN_SHARED_BUSINESSES} or more businesses: "
+            f"{before.reviewer_pairs_sharing_two_or_more} before "
+            f"expansion, {after.reviewer_pairs_sharing_two_or_more} after.",
+        ],
+        "limits": [
+            "A reviewer appearing on a newly collected page shows that they reviewed that business. It does "
+            "not show that reviews were arranged.",
+            "The counts after expansion are higher because more was collected. The increase describes what "
+            "was retrieved, not a change in anyone's behaviour.",
+            "Only the first review page of each expanded business was collected, so reviewers who are not "
+            "on it were not seen.",
+            "No review histories were collected for reviewers first seen during expansion, so overlap among "
+            "them was not assessed.",
+            (
+                "This is fictional data, so the expanded businesses are named and the counts are exact. For "
+                "real data they are not named, their reported review totals and ratings are withheld, and "
+                "small counts are banded."
+            )
+            if exact
+            else (
+                "Which businesses were expanded is not shown, and their reported review totals and ratings are "
+                "withheld. This limits what is disclosed about the reviewers who share them; it does not make "
+                "those reviewers anonymous."
+            ),
+        ],
+    }
+
+
+def _name_list(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def synthetic_view(expansions: int = 0) -> dict[str, Any]:
+    """Individual-level view of the fictional demo graph. Reads nothing from disk.
+
+    ``expansions`` is how many expansion steps to apply. Each uses the real
+    eligibility rule on fictional pages and sends no request; fewer are applied
+    when no business is eligible any more.
+    """
+    names = display_names()
+    original, steps = synthetic_collection(expansions)
+    pages = [page for step in steps for page in step]
+    graph = build_graph(original + pages)
+    expanded = [page.page.business_id for page in pages]
+    view = build_view(graph, SYNTHETIC, names, expanded_businesses=frozenset(expanded), withhold_expanded=False)
+
+    upcoming = [names[business_id] for business_id in expansion_candidates(graph)[:MAX_EXPANSION_BUSINESSES]]
+    if upcoming:
+        one = len(upcoming) == 1
+        statement = (
+            f"Expansion is available. {_name_list(upcoming)} {'is' if one else 'are'} listed in the retrieved "
+            f"histories of both reviewers of at least one pair that shares {MIN_SHARED_BUSINESSES} or more "
+            f"businesses, and {'has' if one else 'have'} no review page yet. Expanding collects "
+            f"{'its' if one else 'their'} first review page, to see who else reviewed "
+            f"{'it' if one else 'them'}. In this demo the page is fictional and built on this computer: no "
+            "request is sent and no credit is used. With real data each page is one SerpApi request that you "
+            "confirm first, and the businesses are chosen by the server without being named."
+        )
+    else:
+        statement = (
+            "No further business qualifies for expansion: no remaining business is listed in the retrieved "
+            "histories of both reviewers of an overlapping pair. Expansion stops here; it never continues "
+            "from reviewers first seen on an expanded page, because their histories were not collected."
+        )
+    previous = build_graph(original + [page for step in steps[:-1] for page in step]) if steps else graph
+    view["expansion"] = {
+        "synthetic": True,
+        "available": bool(upcoming),
+        "max_businesses": MAX_EXPANSION_BUSINESSES if upcoming else 0,
+        "steps": len(steps),
+        "performed": len(pages),
+        "last": None,
+        "statement": statement,
+        # Nodes that the latest step added or turned into a collected page.
+        "new_nodes": sorted((graph.reviewer_ids - previous.reviewer_ids) | {p.page.business_id for p in steps[-1]}) if steps else [],
+        **(expansion_summary(original, pages, exact=True) if pages else {"findings": [], "limits": []}),
+    }
+    return view

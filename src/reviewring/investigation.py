@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from reviewring.indicators import MAX_EXPANSION_BUSINESSES
 from reviewring.models import (
     CONTRIBUTOR_REVIEWS_DEFAULT_NUM,
     CONTRIBUTOR_REVIEWS_ENGINE,
@@ -42,7 +43,6 @@ MAX_REVIEW_PAGES = 4
 
 # Ring expansion: first review pages of businesses shared within an observed
 # repeated overlap. A separate, separately confirmed action; never recursive.
-MAX_EXPANSION_BUSINESSES = 2
 
 # A next-page token is opaque. It is only checked for a plausible form before
 # being sent back, so that a malformed value is never forwarded.

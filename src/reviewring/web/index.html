@@ -94,6 +94,23 @@
         <ul id="points" class="points"></ul>
       </section>
 
+      <section id="demo-expansion" class="card demo-expansion" aria-labelledby="demo-expansion-title" hidden>
+        <h2 id="demo-expansion-title" tabindex="-1">Next step: expand to shared businesses</h2>
+        <p id="demo-stage" class="stage"></p>
+        <p id="demo-statement"></p>
+        <div class="row">
+          <button type="button" id="demo-expand" class="primary">Expand (fictional data, no request)</button>
+          <button type="button" id="demo-reset" class="quiet" hidden>Start again from the initial collection</button>
+        </div>
+        <p id="demo-error" class="error" role="alert" hidden></p>
+        <div id="demo-result" hidden>
+          <h3>What expansion added</h3>
+          <ul id="demo-findings" class="points"></ul>
+          <h3>What this does not show</h3>
+          <ul id="demo-limits" class="points"></ul>
+        </div>
+      </section>
+
       <section class="card" aria-labelledby="network-title">
         <div class="card-head">
           <h2 id="network-title">Reviewer and business network</h2>
@@ -105,6 +122,7 @@
           <li><span class="key key-business"></span>Business</li>
           <li><span class="key key-incomplete"></span>Dashed outline: more exists that was not collected</li>
           <li><span class="key key-group"></span>Ring with G-number: in an overlap group</li>
+          <li id="legend-added" hidden><span class="key key-added"></span>Thick outline: added by the latest expansion step</li>
         </ul>
         <div class="network">
           <div id="graph" class="graph"></div>

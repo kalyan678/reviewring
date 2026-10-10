@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from reviewring import serpapi_client
-from reviewring.graph import build_graph, compute_metrics
+from reviewring.graph import build_graph
 from reviewring.indicators import MIN_SHARED_BUSINESSES, expansion_candidates
 from reviewring.investigation import (
     DEFAULT_HISTORIES,
@@ -51,7 +51,7 @@ from reviewring.investigation import (
 from reviewring.models import ParsedResponse
 from reviewring.parsers import ParseError, parse_maps_reviews
 from reviewring.serpapi_client import SerpApiError
-from reviewring.views import INVESTIGATION, build_view
+from reviewring.views import INVESTIGATION, build_view, expansion_summary
 
 # Safety net across all plans: new requests one server process may attempt.
 PROCESS_REQUEST_CEILING = 30
@@ -93,7 +93,6 @@ class _Investigation:
     expansion_pages: list[ParsedResponse] = field(default_factory=list)
     expanded_ids: list[str] = field(default_factory=list)
     expansions: list[Collection] = field(default_factory=list)
-    before_expansion: dict[str, int] = field(default_factory=dict)  # metrics of the original investigation
     activity: str = "collecting"  # what a running state is doing: "collecting" or "expanding"
 
 
@@ -516,41 +515,7 @@ class LiveState:
                 "stopped": last.stopped,
             }
         if investigation.expansion_pages:
-            graph = build_graph(investigation.collection.parsed + investigation.expansion_pages)
-            metrics = compute_metrics(graph)
-            before = investigation.before_expansion
-            earlier = {o.reviewer_id for parsed in investigation.collection.parsed for o in parsed.observations}
-            seen_again = len(earlier & {o.reviewer_id for page in investigation.expansion_pages for o in page.observations})
-            pages = len(investigation.expansion_pages)
-            reviews = sum(len(page.observations) for page in investigation.expansion_pages)
-            again = (
-                "None of the reviewers already in this investigation appears"
-                if seen_again == 0
-                else "Fewer than 5 of the reviewers already in this investigation appear"
-                if seen_again < 5
-                else f"{seen_again} of the reviewers already in this investigation appear"
-            )
-            info["findings"] = [
-                f"{pages} shared business{'' if pages == 1 else 'es'} {'was' if pages == 1 else 'were'} expanded, "
-                f"each by its first review page: {reviews} review{'' if reviews == 1 else 's'} collected.",
-                f"Reviewers in the investigation: {before['reviewers']} before expansion, {metrics.reviewers} after.",
-                f"{again} on the newly collected page{'' if pages == 1 else 's'}.",
-                f"Reviewer pairs sharing {MIN_SHARED_BUSINESSES} or more businesses: {before['pairs']} before "
-                f"expansion, {metrics.reviewer_pairs_sharing_two_or_more} after.",
-            ]
-            info["limits"] = [
-                "A reviewer appearing on a newly collected page shows that they reviewed that business. It does "
-                "not show that reviews were arranged.",
-                "The counts after expansion are higher because more was collected. The increase describes what "
-                "was retrieved, not a change in anyone's behaviour.",
-                "Only the first review page of each expanded business was collected, so reviewers who are not "
-                "on it were not seen.",
-                "No review histories were collected for reviewers first seen during expansion, so overlap among "
-                "them was not assessed.",
-                "Which businesses were expanded is not shown, and their reported review totals and ratings are "
-                "withheld. This limits what is disclosed about the reviewers who share them; it does not make "
-                "those reviewers anonymous.",
-            ]
+            info.update(expansion_summary(investigation.collection.parsed, investigation.expansion_pages))
         return info
 
     def plan_expansion(self, investigation_id: Any, businesses: Any) -> dict[str, Any]:
@@ -611,9 +576,6 @@ class LiveState:
                 raise LiveError(409, "Wait for the running collection to finish.")
             self._running = True
         resting_state = investigation.state
-        if not investigation.before_expansion:
-            metrics = compute_metrics(build_graph(investigation.collection.parsed))
-            investigation.before_expansion = {"reviewers": metrics.reviewers, "pairs": metrics.reviewer_pairs_sharing_two_or_more}
         investigation.activity = "expanding"
         investigation.state = "running"
 

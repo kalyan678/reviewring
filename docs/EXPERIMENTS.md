@@ -6,7 +6,7 @@ Experiment log, using the format from `PROJECT_SPEC.md` Section 24. Only observe
 
 **Raw data contract:** every uncached response is saved as a *sanitized raw response*: the complete SerpApi response before any application-level transformation, with the API key replaced by `[REDACTED]`. Schemas are validated against these files.
 
-**SerpApi requests attempted in total:** 11 (6 in the experiments below, 2 in the first live dashboard validation, 3 in the live reviewer-history validation, one of which was rejected).
+**SerpApi requests attempted in total:** 13, of which 12 succeeded (6 in the experiments below, 2 in the first live dashboard validation, 3 in the live reviewer-history validation, one of which was rejected, 1 in the entry-limit validation, and 1 in the live pagination validation).
 
 ---
 
@@ -216,6 +216,49 @@ One pair of reviewers, 10 entries each out of several hundred. This cannot rule 
 
 ---
 
+## Entry-Limit Validation
+
+**Date:** 2026-10-10
+**SerpApi searches attempted:** 1 (successful)
+**Scope:** one Contributor Reviews request with an entry limit of 50, for a reviewer whose default history was already saved.
+
+### Results
+
+- 50 entries were requested and 50 were returned.
+- The first 10 entries were the same as in the default response for that reviewer.
+
+### Limitations
+
+One reviewer, one limit. Larger limits, and whether a full window ever means a complete history, were not tested.
+
+### Decision
+
+**PASS — the entry limit enlarges the history window.** 50 is the dashboard's default.
+
+---
+
+## Live Pagination Validation
+
+**Date:** 2026-10-10
+**SerpApi searches attempted:** 1 (successful)
+**Scope:** the dashboard's Investigate workflow with two review pages and no histories, for a business whose search and first review page were already saved.
+
+### Results
+
+- The plan stated at most 1 new request; 1 was sent, using the next-page token the saved first page had returned.
+- The second page held 10 reviews.
+- The response provided a token for a further page, which was not used.
+
+### Limitations
+
+One business, one further page. Third and fourth pages, and a response without a token, were not observed live.
+
+### Decision
+
+**PASS — bounded review pagination works through the dashboard.**
+
+---
+
 ## EXP-003 — Ring Expansion
 
-Not run. It requires a reviewer group meeting the overlap indicator in real data, and none has been observed.
+Not run against the real service. It requires a reviewer pair meeting the overlap indicator in real data, and none has been observed. Expansion is implemented and has run only on a simulated SerpApi in tests and on the fictional pages of the synthetic demo.

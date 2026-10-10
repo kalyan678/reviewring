@@ -115,6 +115,23 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 1rem; display: grid; gap: 1
   cursor: pointer;
 }
 .state button { margin-top: 0.75rem; }
+.primary {
+  font: inherit;
+  min-height: 44px;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--text);
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--surface);
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.demo-expansion { border: 2px dashed var(--warn-border); }
+.demo-expansion h3 { margin-top: 1rem; }
+.demo-expansion .row { margin-top: 0.75rem; }
+.stage { font-weight: 600; margin-bottom: 0.5rem; }
+.key-added { border: 3px solid var(--warn-border); border-radius: 4px; }
 
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
@@ -150,6 +167,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 1rem; display: grid; gap: 1
 .node .hit { fill: transparent; }
 .node:focus-visible { outline: none; }
 .node:focus-visible .shape { stroke: var(--focus); stroke-width: 3; }
+.node.added .shape { stroke: var(--warn-border); stroke-width: 4; }
 .node.selected .shape { stroke: var(--focus); stroke-width: 3; }
 .dim { opacity: 0.15; }
 .link.active { stroke: var(--text); stroke-opacity: 0.9; }

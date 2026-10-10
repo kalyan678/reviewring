@@ -11,6 +11,11 @@ contributor histories the demo pretends were collected. It is rendered into
 response-shaped dictionaries and passed through the real parsers and merge, so
 the demo exercises the same pipeline as saved data. The table is constant, so
 the graph is identical on every run.
+
+The demo can also be expanded, step by step, with the same eligibility rule as
+a real investigation (``indicators.expansion_candidates``). An expansion step
+adds the fictional first review page of the businesses that rule selects.
+Nothing is requested from anywhere: the pages come from the same table.
 """
 
 from __future__ import annotations
@@ -18,7 +23,8 @@ from __future__ import annotations
 from typing import Any
 
 from reviewring.graph import Graph, build_graph
-from reviewring.models import CONTRIBUTOR_REVIEWS_ENGINE, MAPS_REVIEWS_ENGINE
+from reviewring.indicators import MAX_EXPANSION_BUSINESSES, expansion_candidates
+from reviewring.models import CONTRIBUTOR_REVIEWS_ENGINE, MAPS_REVIEWS_ENGINE, ParsedResponse
 from reviewring.parsers import parse_contributor_reviews, parse_maps_reviews
 
 
@@ -61,6 +67,13 @@ REVIEWS = {
     11: {1: 4, 2: 5},
     13: {2: 3, 7: 5},
     14: {3: 1},
+    # Reviewers below are on no initially collected page and have no collected
+    # history, so they are unseen until a business they reviewed is expanded.
+    15: {4: 5, 6: 5},
+    16: {4: 5, 6: 5},
+    17: {6: 4},
+    18: {5: 4},
+    19: {4: 3, 5: 2},
 }
 
 # Review pages the demo pretends to have captured: business number ->
@@ -71,6 +84,17 @@ PAGES = {
     3: (6, 4.3, False),
 }
 
+# First review pages that exist only for expansion, in the same form. Which
+# of them is added, and in what order, is decided by the eligibility rule.
+EXPANSION_PAGES = {
+    4: (9, 4.8, False),
+    5: (60, 4.1, True),  # a busy grocer: most of its reviewers stay uncollected
+    6: (8, 4.9, False),
+}
+
+# The demo offers at most this many expansion steps; the rule runs out sooner.
+MAX_EXPANSION_STEPS = 4
+
 # Reviewers whose contributor history the demo pretends to have fetched.
 HISTORIES = (1, 2, 3, 4, 5, 6, 7, 9)
 
@@ -80,7 +104,7 @@ def _review_id(reviewer: int, business: int) -> str:
 
 
 def _page_response(business: int) -> dict[str, Any]:
-    total, rating, more = PAGES[business]
+    total, rating, more = (PAGES | EXPANSION_PAGES)[business]
     response: dict[str, Any] = {
         "search_parameters": {"engine": MAPS_REVIEWS_ENGINE, "data_id": business_id(business)},
         "place_info": {"type": BUSINESSES[business][1], "reviews": total, "rating": rating},
@@ -116,17 +140,41 @@ def _history_response(reviewer: int) -> dict[str, Any]:
     }
 
 
-def build_synthetic_graph() -> Graph:
-    """The demo graph, built through the same parsers and merge as saved data."""
-    parsed = [
+def synthetic_collection(expansions: int = 0) -> tuple[list[ParsedResponse], list[list[ParsedResponse]]]:
+    """The demo's initial collection, and the pages added by each expansion step.
+
+    Each step takes the businesses the real eligibility rule puts first, at
+    most ``MAX_EXPANSION_BUSINESSES`` of them, exactly as a confirmed real
+    expansion would. A step that finds no eligible business ends the sequence,
+    so fewer steps than asked for may be returned.
+    """
+    original = [
         parse_maps_reviews(_page_response(business), f"synthetic-page-{business:02d}")
         for business in PAGES
     ]
-    parsed += [
+    original += [
         parse_contributor_reviews(_history_response(reviewer), f"synthetic-history-{reviewer:02d}")
         for reviewer in HISTORIES
     ]
-    return build_graph(parsed)
+    numbers = {business_id(number): number for number in BUSINESSES}
+    steps: list[list[ParsedResponse]] = []
+    for _ in range(expansions):
+        collected = original + [page for step in steps for page in step]
+        chosen = expansion_candidates(build_graph(collected))[:MAX_EXPANSION_BUSINESSES]
+        if not chosen:
+            break
+        steps.append(
+            [
+                parse_maps_reviews(_page_response(numbers[chosen_id]), f"synthetic-expansion-page-{numbers[chosen_id]:02d}")
+                for chosen_id in chosen
+            ]
+        )
+    return original, steps
+
+
+def build_synthetic_graph() -> Graph:
+    """The demo's initial graph, built through the same parsers and merge as saved data."""
+    return build_graph(synthetic_collection()[0])
 
 
 def display_names() -> dict[str, str]:

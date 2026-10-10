@@ -20,6 +20,8 @@ from reviewring.graph import Graph
 from reviewring.models import CONTRIBUTOR_REVIEWS_ENGINE
 
 MIN_SHARED_BUSINESSES = 2
+# Most businesses one expansion step may add. Provisional, like the threshold above.
+MAX_EXPANSION_BUSINESSES = 2
 
 
 @dataclass(frozen=True)

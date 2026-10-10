@@ -9,6 +9,7 @@ const ROW_HEIGHT = 44;
 const $ = (id) => document.getElementById(id);
 let current = null; // the view being shown
 let selection = null; // { ids: Set, title, lines, pinned }
+let demoSteps = 0; // expansion steps applied to the synthetic demo; reset whenever the demo is opened
 
 function el(tag, attrs = {}, text) {
   const node = document.createElement(tag);
@@ -66,6 +67,7 @@ async function load(mode) {
   if (mode === "investigate") return openInvestigate();
   showState("Loading", "Building the view from local data.");
   try {
+    demoSteps = 0;
     const view = await request(`/api/view?mode=${mode}`);
     if (mode !== modeFromHash()) return; // a newer selection replaced this one
     if (!view.available) return showUnavailable(view);
@@ -136,10 +138,50 @@ function render(view) {
   $("headline").textContent = view.explanation.headline;
   $("assessment").textContent = view.explanation.assessment.statement;
   replace($("points"), ...view.explanation.points.map((point) => el("li", {}, point)));
+  renderDemoExpansion(view);
   renderNetwork(view);
   renderCoverage(view);
   renderIndicators(view);
   renderRatings(view);
+}
+
+// The synthetic demo's own expansion stage: same rule and wording as a real
+// expansion, computed locally on fictional data. Nothing is sent anywhere.
+function renderDemoExpansion(view) {
+  const expansion = view.synthetic ? view.expansion : null;
+  $("demo-expansion").hidden = !expansion;
+  $("legend-added").hidden = !(expansion && expansion.new_nodes.length);
+  if (!expansion) return;
+  $("demo-expansion-title").textContent = expansion.steps
+    ? "Expansion: what collecting more showed"
+    : "Next step: expand to shared businesses";
+  $("demo-stage").textContent = expansion.steps
+    ? `After ${plural(expansion.steps, "expansion step")}: ${plural(expansion.performed, "shared business", "shared businesses")} expanded. Nodes with a thick outline below were added by the latest step.`
+    : "Initial collection: three review pages and eight reviewer histories. Nothing has been expanded yet.";
+  $("demo-statement").textContent = expansion.statement;
+  $("demo-expand").hidden = !expansion.available;
+  $("demo-expand").disabled = false;
+  $("demo-reset").hidden = !expansion.steps;
+  $("demo-error").hidden = true;
+  $("demo-result").hidden = !expansion.findings.length;
+  replace($("demo-findings"), ...expansion.findings.map((line) => el("li", {}, line)));
+  replace($("demo-limits"), ...expansion.limits.map((line) => el("li", {}, line)));
+}
+
+async function loadDemoStep(steps) {
+  $("demo-expand").disabled = true;
+  $("demo-error").hidden = true;
+  try {
+    const view = await request(`/api/view?mode=synthetic&expansions=${steps}`);
+    if (modeFromHash() !== "synthetic") return;
+    demoSteps = view.expansion.steps;
+    show(view);
+    $("demo-expansion-title").focus();
+  } catch (error) {
+    $("demo-expand").disabled = false;
+    $("demo-error").textContent = "The expansion could not be shown. Check that the ReviewRing server is still running, then try again.";
+    $("demo-error").hidden = false;
+  }
 }
 
 function renderTiles(view) {
@@ -184,7 +226,11 @@ function renderCoverage(view) {
     let note = `${plural(row.pages, "review page")} collected.`;
     if (row.not_collected) note += ` ${row.not_collected} reported reviews not collected.`;
     if (row.further_pages) note += " A token for a further page was provided and not used.";
-    if (row.expanded) note = "Collected by expansion: first review page only. Its reported total is withheld.";
+    if (row.expanded) {
+      note = "Collected by expansion: first review page only.";
+      if (row.withheld) note += " Its reported total is withheld.";
+      else if (row.not_collected) note += ` ${row.not_collected} reported reviews not collected.`;
+    }
     parts.push(meter(row.label, row.captured, row.reported_total, note));
   }
   if (c.page_statement) parts.push(el("p", { class: "muted" }, c.page_statement));
@@ -292,8 +338,8 @@ function renderRatings(view) {
       const row = el("tr");
       row.append(
         el("td", {}, b.label),
-        el("td", { class: "num" }, b.expanded ? "withheld" : b.reported_rating === null ? "not reported" : String(b.reported_rating)),
-        el("td", { class: "num" }, b.expanded ? "withheld" : b.reported_total === null ? "not reported" : String(b.reported_total)),
+        el("td", { class: "num" }, b.withheld ? "withheld" : b.reported_rating === null ? "not reported" : String(b.reported_rating)),
+        el("td", { class: "num" }, b.withheld ? "withheld" : b.reported_total === null ? "not reported" : String(b.reported_total)),
         el("td", { class: "num" }, String(b.captured_reviews)),
         el("td", {}, b.captured_distribution.map((d) => `${d.count} x ${d.rating} star`).join(", ") || "none")
       );
@@ -426,7 +472,8 @@ function renderNetwork(view) {
   for (const node of network.nodes) {
     const { x, y } = position.get(node.id);
     const r = radius(node);
-    const group = svg("g", { class: `node ${node.kind}`, tabindex: "0", role: "button", "aria-label": `${node.label}. ${node.detail.join(" ")}` });
+    const added = view.expansion && view.expansion.new_nodes && view.expansion.new_nodes.includes(node.id);
+    const group = svg("g", { class: `node ${node.kind}${added ? " added" : ""}`, tabindex: "0", role: "button", "aria-label": `${node.label}. ${node.detail.join(" ")}` });
     group.dataset.id = node.id;
     group.append(svg("rect", { class: "hit", x: String(x - 22), y: String(y - ROW_HEIGHT / 2), width: "44", height: String(ROW_HEIGHT) }));
     if (node.group) group.append(svg("circle", { class: "ring", cx: String(x), cy: String(y), r: String(r + 5) }));
@@ -703,6 +750,8 @@ for (const mode of MODES) {
   $(`mode-${mode}`).addEventListener("click", () => { location.hash = mode; });
 }
 $("clear").addEventListener("click", () => select(null));
+$("demo-expand").addEventListener("click", () => loadDemoStep(demoSteps + 1));
+$("demo-reset").addEventListener("click", () => loadDemoStep(0));
 window.addEventListener("hashchange", () => load(modeFromHash()));
 
 let resizeTimer = null;

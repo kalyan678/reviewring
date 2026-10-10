@@ -19,7 +19,7 @@ uv sync
 uv run main.py
 ```
 
-Leave that command running. In a browser on the same computer, go to `http://127.0.0.1:8765` and choose **Synthetic demo**. It runs fully offline. Use `uv run main.py --port 9000` for another port.
+Leave that command running. In a browser on the same computer, go to `http://127.0.0.1:8765` and choose **Synthetic demo**. It runs fully offline, needs no SerpApi key, and uses no credits. Press **Expand (fictional data, no request)** to walk through the whole investigation, including expansion and the before-and-after comparison. Use `uv run main.py --port 9000` for another port.
 
 `127.0.0.1` is your own machine, not a website. The address answers only while `main.py` is running, and only on that computer; opening it anywhere else shows "This site can't be reached".
 
@@ -59,7 +59,7 @@ The dashboard has three tabs.
 
 | Tab | Data | Needs |
 |---|---|---|
-| **Synthetic demo** | Fictional businesses and reviewers that show a multi-reviewer overlap pattern | Nothing. Works on a fresh clone. |
+| **Synthetic demo** | Fictional businesses and reviewers that show a multi-reviewer overlap pattern, with interactive expansion | Nothing. Works on a fresh clone. |
 | **Collected sample** | Every SerpApi response saved on your computer, shown as totals and groups | Saved responses. On a fresh clone it shows "No collected sample on this computer". |
 | **Investigate** | A live, bounded investigation of a business you search for | Your own SerpApi key |
 
@@ -73,7 +73,17 @@ Each view contains:
 
 ### The synthetic demo
 
-Thirteen fictional reviewers and seven fictional businesses. Five reviewers share the same four unrelated businesses; two others share a cafe and a grocer. The indicator links both sets on purpose: the second is an everyday overlap, and it shows why a shared-business pattern is a reason to look closer and not proof of anything. The demo is labelled "SYNTHETIC DEMO" throughout and is evidence of nothing about any real business or person.
+Everything in it is invented, and it stays labelled SYNTHETIC throughout. It is an interactive walk through the same steps as a real investigation:
+
+1. **Initial collection.** Thirteen fictional reviewers and seven fictional businesses, from three review pages and eight reviewer histories. Five reviewers share the same four unrelated businesses; two others share a cafe and a grocer. The indicator links both sets on purpose: the second is an everyday overlap, and it shows why a shared-business pattern is a reason to look closer and not proof of anything.
+2. **Expansion is offered.** A card under the summary names the businesses that qualify under the same rule a real investigation uses, and says why.
+3. **Press Expand.** The first step adds the fictional first review page of two shared businesses. Four reviewers not seen before appear, two of them on both pages, so the larger group grows from five reviewers to seven and overlapping pairs go from 11 to 20. Added nodes get a thick outline.
+4. **Press Expand again.** The second step adds the grocer's page. It adds one reviewer and no overlapping pair: the everyday pair is still just a pair. After that nothing qualifies and the page says why.
+5. **Compare.** "What expansion added" states the before-and-after figures, and "What this does not show" states that the counts rose because more was collected, not because anyone behaved differently.
+
+The steps are computed on your computer by the real graph, overlap and eligibility code, on fictional pages. No request is sent, so no key or credit is involved, and the result is identical every time. **Start again** returns to the initial collection.
+
+Fictional evidence is not a finding. The demo shows what the pattern and the workflow look like; it says nothing about any real business or reviewer. The only real results are listed under [What has been verified against the real service](#what-has-been-verified-against-the-real-service), and they contain no overlap.
 
 ## Optional: live investigation with your own SerpApi key
 
@@ -121,7 +131,7 @@ An investigation never requests any business other than the one you selected. Ex
 
 ## What has been verified against the real service
 
-All figures are from `docs/EXPERIMENTS.md`. Eleven SerpApi requests were attempted in total; ten succeeded.
+All figures are from `docs/EXPERIMENTS.md`. Thirteen SerpApi requests were attempted in total; twelve succeeded.
 
 - **The API chain works.** Search returns business identifiers, a business's reviews return reviewer identifiers, a reviewer's history returns business identifiers, and those identifiers match across the three engines.
 - **The graph builds from real responses.** Six responses merged into 23 reviewers, 7 businesses, and 29 links in one connected component.
@@ -130,8 +140,9 @@ All figures are from `docs/EXPERIMENTS.md`. Eleven SerpApi requests were attempt
 - **One live failure was observed:** a request rejected with an authentication error stopped collection at once, kept the page data, and showed a fixed message.
 
 - **The entry limit works:** one history requested with 50 entries returned 50, beginning with the same 10 as before.
+- **Review pagination works through the dashboard:** one second review page was collected with the token the first page returned. It held 10 reviews and the response provided a token for a further page, which was not used.
 
-Not verified against the real service: collecting more than one review page through the dashboard (a second page was collected once by an experiment script, not by the dashboard), the revised reviewer selection, overlap detection on real data that contains overlap, expansion to shared businesses (no qualifying business has been observed in real data), and timeouts. These are tested against a simulated SerpApi only.
+Not verified against the real service: collecting more than two review pages in one investigation, the revised reviewer selection, overlap detection on real data that contains overlap, expansion to shared businesses (no qualifying business has been observed in real data), and timeouts. These are tested against a simulated SerpApi only. Expansion in particular has only ever run on simulated and fictional data.
 
 ## Limitations
 

@@ -97,6 +97,19 @@ class DashboardServerTests(unittest.TestCase):
         view = json.loads(body)
         self.assertEqual((status, view["mode"], view["synthetic"], view["available"]), (200, "synthetic", True, True))
 
+    def test_synthetic_expansion_steps_are_served_locally_and_validated(self):
+        self.start()
+        status, _, body = self.get("/api/view?mode=synthetic&expansions=1")
+        view = json.loads(body)
+        self.assertEqual((status, view["synthetic"], view["expansion"]["steps"], view["metrics"]["reviewers"]), (200, True, 1, 17))
+        self.assertEqual(json.loads(self.get("/api/view?mode=synthetic&expansions=0")[2]), json.loads(self.get("/api/view?mode=synthetic")[2]))
+        for bad in ("9", "-1", "abc", "1.5", "01"):
+            with self.subTest(expansions=bad):
+                self.assertEqual(self.get(f"/api/view?mode=synthetic&expansions={bad}")[0], 400)
+        # The parameter belongs to the fictional demo only.
+        status, _, body = self.get("/api/view?mode=real&expansions=1")
+        self.assertEqual((status, "expansion" in json.loads(body)), (200, False))
+
     def test_missing_saved_data_is_an_explicit_state_not_an_error(self):
         self.start()
         status, _, body = self.get("/api/view?mode=real")
@@ -206,6 +219,16 @@ class StaticPageTests(unittest.TestCase):
         self.assertRegex(script, r"expansions/plan[\s\S]{0,120}askConfirm\(plan")
         self.assertIn("expansion.findings", script)
         self.assertIn("expansion.limits", script)
+
+    def test_synthetic_demo_has_an_explicit_expansion_action(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        self.assertIn('id="demo-expand" class="primary">Expand (fictional data, no request)</button>', html)
+        self.assertIn('id="demo-reset"', html)
+        self.assertIn("/api/view?mode=synthetic&expansions=${steps}", script)
+        # Shown for the synthetic view only, and it never posts or spends anything.
+        self.assertIn("const expansion = view.synthetic ? view.expansion : null;", script)
+        start = script.index("async function loadDemoStep")
+        self.assertNotIn("post(", script[start:start + 800])
 
     def test_synthetic_mode_is_conspicuously_labelled(self):
         self.assertIn("SYNTHETIC DEMO", self.sources["app.js"])

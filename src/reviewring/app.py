@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from reviewring.live import LiveError, LiveState
 from reviewring.loader import RAW_DIR
+from reviewring.synthetic import MAX_EXPANSION_STEPS
 from reviewring.views import REAL, SYNTHETIC, real_view, synthetic_view
 
 HOST = "127.0.0.1"
@@ -153,10 +154,17 @@ def make_handler(raw_dir: Path, live: LiveState) -> type[BaseHTTPRequestHandler]
                 return
             if url.path == "/api/view":
                 def view() -> dict:
-                    mode = parse_qs(url.query).get("mode", [REAL])[0]
+                    query = parse_qs(url.query)
+                    mode = query.get("mode", [REAL])[0]
                     if mode not in (REAL, SYNTHETIC):
                         raise _Rejected(400, "Unknown mode. Use 'real' or 'synthetic'.")
-                    return real_view(raw_dir) if mode == REAL else synthetic_view()
+                    if mode == REAL:
+                        return real_view(raw_dir)
+                    # Expansion steps of the fictional demo: computed locally, no request sent.
+                    steps = query.get("expansions", ["0"])[0]
+                    if steps not in {str(n) for n in range(MAX_EXPANSION_STEPS + 1)}:
+                        raise _Rejected(400, f"Use 0 to {MAX_EXPANSION_STEPS} expansion steps.")
+                    return synthetic_view(int(steps))
 
                 self._respond(view)
             elif url.path == "/api/session":

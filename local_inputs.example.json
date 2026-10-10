@@ -1,0 +1,15 @@
+{
+  "search_query": "bakeries in Exampleville",
+  "seed_business_name": "Example Bakery",
+  "seed_data_id": "0x0000000000000001:0x0000000000000002",
+  "raw_files": {
+    "call1_search": "google_maps_0000000000000001.json",
+    "call2_reviews_page1": "google_maps_reviews_0000000000000002.json",
+    "call3_contributor_history": "google_maps_contributor_reviews_0000000000000003.json",
+    "call4_reviews_page2": "google_maps_reviews_0000000000000004.json",
+    "call5_contributor_history": "google_maps_contributor_reviews_0000000000000005.json",
+    "call6_business_reviews": "google_maps_reviews_0000000000000006.json"
+  },
+  "call5_selected_position": 2,
+  "call5_expected_reported_reviews": 3
+}

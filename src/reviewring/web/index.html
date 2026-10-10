@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReviewRing</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>ReviewRing</h1>
+      <p>Follow the reviewers. See what they share, and what is still unknown.</p>
+    </div>
+    <div class="modes" role="group" aria-label="Data shown">
+      <button type="button" id="mode-real" aria-pressed="false">Collected sample</button>
+      <button type="button" id="mode-synthetic" aria-pressed="false">Synthetic demo</button>
+      <button type="button" id="mode-investigate" aria-pressed="false">Investigate</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" role="status"></div>
+
+  <main id="main">
+    <section id="investigate" class="card" aria-labelledby="investigate-title" hidden>
+      <h2 id="investigate-title">Investigate a business</h2>
+      <p class="muted">Search Google Maps through SerpApi, choose a business, then collect its first page of reviews and a few reviewers' review histories. Before anything is sent you are told the most it can cost, and nothing is sent until you confirm.</p>
+      <p id="key-missing" class="callout" hidden>No SerpApi key is configured, so only searches and businesses already saved on this computer can be used. Add SERPAPI_API_KEY to the .env file and restart to collect new data.</p>
+
+      <form id="search-form" class="row">
+        <label for="query">Business search</label>
+        <input id="query" name="query" type="search" minlength="3" maxlength="120" required autocomplete="off" placeholder="For example: bakery in Leeds">
+        <button type="submit">Check cost</button>
+      </form>
+
+      <form id="results-form" hidden>
+        <fieldset>
+          <legend>Choose a business</legend>
+          <div id="results" class="results"></div>
+        </fieldset>
+        <div class="row">
+          <label for="histories" id="histories-label">Reviewer histories to collect</label>
+          <input id="histories" name="histories" type="number" min="0" max="8" value="3" required>
+          <button type="submit">Check cost</button>
+        </div>
+        <p class="muted">Histories are requested for the reviewers on the first page who report the most reviews. Each history is one request.</p>
+      </form>
+
+      <div id="confirm" class="confirm" role="group" aria-labelledby="confirm-text" hidden>
+        <p id="confirm-text"></p>
+        <button type="button" id="confirm-yes">Confirm and send</button>
+        <button type="button" id="confirm-no">Cancel</button>
+      </div>
+
+      <p id="live-error" class="error" role="alert" hidden></p>
+      <p id="progress" class="progress" role="status" hidden></p>
+      <div id="live-summary" class="callout" hidden></div>
+    </section>
+
+    <section id="state" class="card state" hidden></section>
+
+    <div id="dashboard" hidden>
+      <section class="tiles" aria-label="Key figures" id="tiles"></section>
+
+      <section class="card" aria-labelledby="explain-title">
+        <h2 id="explain-title">What this shows</h2>
+        <p id="headline" class="headline"></p>
+        <p id="assessment" class="callout"></p>
+        <ul id="points" class="points"></ul>
+      </section>
+
+      <section class="card" aria-labelledby="network-title">
+        <div class="card-head">
+          <h2 id="network-title">Reviewer and business network</h2>
+          <button type="button" id="clear" class="quiet" hidden>Clear selection</button>
+        </div>
+        <p id="network-note" class="muted"></p>
+        <ul class="legend" aria-label="Legend">
+          <li><span class="key key-reviewer"></span>Reviewer</li>
+          <li><span class="key key-business"></span>Business</li>
+          <li><span class="key key-incomplete"></span>Dashed outline: more exists that was not collected</li>
+          <li><span class="key key-group"></span>Ring with G-number: in an overlap group</li>
+        </ul>
+        <div class="network">
+          <div id="graph" class="graph"></div>
+          <aside id="detail" class="detail" aria-live="polite"></aside>
+        </div>
+        <details class="table-view">
+          <summary>View connections as a table</summary>
+          <div class="scroll"><table id="links-table"></table></div>
+        </details>
+      </section>
+
+      <div class="columns">
+        <section class="card" aria-labelledby="coverage-title">
+          <h2 id="coverage-title">Coverage: what was and was not collected</h2>
+          <div id="coverage"></div>
+        </section>
+
+        <section class="card" aria-labelledby="indicator-title">
+          <h2 id="indicator-title">Overlap indicator</h2>
+          <div id="indicators"></div>
+        </section>
+      </div>
+
+      <section class="card" aria-labelledby="ratings-title">
+        <h2 id="ratings-title">Ratings</h2>
+        <div id="ratings"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="foot">
+    <p>ReviewRing shows structural patterns in who reviewed what. It does not decide whether any review, reviewer, or business is fraudulent, and nothing here is proof of wrongdoing.</p>
+    <p id="network-use"></p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

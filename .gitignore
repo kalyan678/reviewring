@@ -1,0 +1,19 @@
+# Secrets and private local inputs
+.env
+local_inputs.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (raw SerpApi responses and request cache stay local)
+data/raw/
+data/cache/
+*.db
+
+# OS
+.DS_Store

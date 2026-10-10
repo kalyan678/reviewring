@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from itertools import combinations
 
 from reviewring.models import (
+    CONTRIBUTOR_REVIEWS_DEFAULT_NUM,
     MAPS_REVIEWS_ENGINE,
     BusinessAttributes,
     ContributorHistory,
@@ -237,6 +238,81 @@ def business_coverage(graph: Graph) -> list[BusinessCoverage]:
                 unfollowed_page_tokens=sum(
                     1 for page in pages if page.next_token is not None and page.next_token not in used_tokens
                 ),
+            )
+        )
+    return coverage
+
+
+# How complete a retrieved contributor history appears to be.
+HISTORY_PARTIAL = "partial"  # something observed says more exists
+HISTORY_APPARENTLY_COMPLETE = "apparently_complete"  # nothing observed says more exists
+HISTORY_UNKNOWN = "unknown"  # the window was filled and no total is available
+
+# A reported review total can differ slightly from what a history returns
+# (observed: reported one fewer than returned), so a gap of this size is not
+# treated as evidence of truncation.
+REPORTED_COUNT_TOLERANCE = 1
+
+
+@dataclass(frozen=True)
+class HistoryCoverage:
+    """How much of one reviewer's history was retrieved. Never a statement of certainty."""
+
+    reviewer_id: str
+    entries_returned: int
+    unique_businesses: int
+    limit: int  # the requested `num`, or the documented default when none was sent
+    limit_reached: bool
+    pagination_offered: bool
+    reported_total: int | None  # None = not reported anywhere
+    status: str
+
+
+def history_coverage(graph: Graph) -> list[HistoryCoverage]:
+    """Coverage of each retrieved history, using the largest window per reviewer.
+
+    A missing next-page marker is NOT treated as completeness: the API returned
+    10-entry windows for profiles reporting hundreds of reviews with no marker.
+    """
+    coverage = []
+    for reviewer_id in sorted(graph.histories):
+        history = max(graph.histories[reviewer_id], key=lambda h: h.entries_listed)
+        reported = history.reported_total
+        if reported is None:
+            # Fall back to the count shown on a review page, when unambiguous.
+            page_counts = {
+                record.reported_review_count
+                for record in graph.reviewer_attributes.get(reviewer_id, [])
+                if record.reported_review_count is not None
+            }
+            reported = page_counts.pop() if len(page_counts) == 1 else None
+        limit = history.requested_limit or CONTRIBUTOR_REVIEWS_DEFAULT_NUM
+        limit_reached = history.entries_listed >= limit
+        pagination_offered = history.next_token is not None
+        more_reported = reported is not None and reported - history.entries_listed > REPORTED_COUNT_TOLERANCE
+        if pagination_offered or more_reported:
+            status = HISTORY_PARTIAL
+        elif limit_reached and reported is None:
+            status = HISTORY_UNKNOWN
+        else:
+            status = HISTORY_APPARENTLY_COMPLETE
+        coverage.append(
+            HistoryCoverage(
+                reviewer_id=reviewer_id,
+                entries_returned=history.entries_listed,
+                unique_businesses=len(
+                    {
+                        business_id
+                        for (edge_reviewer, business_id), edge in graph.edges.items()
+                        if edge_reviewer == reviewer_id
+                        and any(o.source.file == history.source_file for o in edge.observations)
+                    }
+                ),
+                limit=limit,
+                limit_reached=limit_reached,
+                pagination_offered=pagination_offered,
+                reported_total=reported,
+                status=status,
             )
         )
     return coverage

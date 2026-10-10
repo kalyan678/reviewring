@@ -24,10 +24,12 @@ Current phase: **Application v0.1 with Live Investigation v0.1, built on Graph F
 
 ## Live investigation rules
 
-- **Status:** live search and first-page review collection were validated once against the real service (two requests, zero reviewer histories). Live history collection and overlap detection in a live investigation are tested against a simulated SerpApi only. Do not describe them as verified live, and do not claim any real coordination finding.
+- **Status:** live search, first-page review collection, and collection of two reviewer histories were each validated once against the real service. The `num` entry limit, the revised reviewer selection, and overlap detection on real overlapping data are tested against a simulated SerpApi only. Do not describe them as verified live, and do not claim any real coordination finding.
 - **Never make a real SerpApi request while developing or testing** unless the project owner approves that specific run and its request limit. Tests and manual checks use a fake `search` / `is_cached` passed to `LiveState`; never start a browser check against a server built with the default `LiveState`.
 - **Every credit-spending action needs a server-issued plan** (`src/reviewring/live.py`): plan first, execute second, with the plan's maximum enforced during execution. Do not add an endpoint that sends a request without one.
-- **Collection is bounded** (`src/reviewring/investigation.py`): one search, one first review page, at most `MAX_HISTORIES` histories. No pagination, no requests for businesses found in histories, no recursion, no retries. Do not raise the limits or the per-process ceiling without approval.
+- **A contributor history is a window, never assumed complete.** Do not treat a missing next-page marker, or a full `num` window, as the whole history. Keep the wording "retrieved review windows"; never say that no overlap exists. Reported review totals are approximate and are reviewer-level data: show them only in aggregate for five or more reviewers.
+- **Reviewer selection is a coverage rule** (`choose_reviewers`), not a suspicion ranking. Do not rank reviewers by anything about their reviews.
+- **Collection is bounded** (`src/reviewring/investigation.py`): one search, one first review page, at most `MAX_HISTORIES` histories of at most `MAX_HISTORY_LIMIT` entries. No pagination, no requests for businesses found in histories, no recursion, no retries. Do not raise the limits or the per-process ceiling without approval.
 - **Keep the request checks:** Host header on every request; same-origin, JSON, and the session token on anything that spends credits or reads an investigation. No CORS headers, cookies, or browser storage.
 - **Never forward SerpApi error text or exception text** to the browser or logs; use the fixed messages in `describe_error`.
 - Business `data_id` values and contributor IDs stay server-side; the browser gets random references.

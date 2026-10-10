@@ -21,7 +21,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from reviewring.models import (
+    CONTRIBUTOR_REVIEWS_DEFAULT_NUM,
     CONTRIBUTOR_REVIEWS_ENGINE,
+    CONTRIBUTOR_REVIEWS_MAX_NUM,
     MAPS_REVIEWS_ENGINE,
     ParsedResponse,
 )
@@ -31,6 +33,15 @@ from reviewring.serpapi_client import MissingApiKeyError, SerpApiError
 MAPS_SEARCH_ENGINE = "google_maps"
 DEFAULT_HISTORIES = 3
 MAX_HISTORIES = 8
+
+# Entries requested per contributor history (the documented `num` parameter).
+# The default is above the API's own default of 10, so that an ordinary
+# reviewer's whole history fits in one request, and well below the documented
+# maximum to limit how much personal data is collected and stored. `num` is a
+# ceiling, not a promise: the API may return fewer entries than asked for.
+MIN_HISTORY_LIMIT = CONTRIBUTOR_REVIEWS_DEFAULT_NUM
+DEFAULT_HISTORY_LIMIT = 50
+MAX_HISTORY_LIMIT = CONTRIBUTOR_REVIEWS_MAX_NUM
 
 Search = Callable[[dict[str, Any]], dict[str, Any]]
 IsCached = Callable[[dict[str, Any]], bool]
@@ -52,8 +63,20 @@ def review_page_params(data_id: str) -> dict[str, str]:
     return {"engine": MAPS_REVIEWS_ENGINE, "data_id": data_id, "hl": "en"}
 
 
-def history_params(contributor_id: str) -> dict[str, str]:
-    return {"engine": CONTRIBUTOR_REVIEWS_ENGINE, "contributor_id": contributor_id}
+def history_params(contributor_id: str, limit: int = CONTRIBUTOR_REVIEWS_DEFAULT_NUM) -> dict[str, Any]:
+    """Contributor Reviews request for up to ``limit`` entries.
+
+    At the API's default the parameter is left out, so the request is identical
+    to the ones verified earlier and their saved responses are still reused. Any
+    other limit is part of the request and therefore of its cache identity: a
+    history saved at one limit is never reused or overwritten at another.
+    """
+    if not MIN_HISTORY_LIMIT <= limit <= MAX_HISTORY_LIMIT:
+        raise ValueError("history limit outside the supported range")
+    params: dict[str, Any] = {"engine": CONTRIBUTOR_REVIEWS_ENGINE, "contributor_id": contributor_id}
+    if limit != CONTRIBUTOR_REVIEWS_DEFAULT_NUM:
+        params["num"] = limit
+    return params
 
 
 def describe_error(error: Exception) -> str:
@@ -78,13 +101,23 @@ def describe_error(error: Exception) -> str:
     return "Collection stopped because of an unexpected error."
 
 
-def choose_reviewers(page: ParsedResponse, count: int) -> list[str]:
-    """Which reviewers' histories to request: a fixed rule, not a judgement.
+def choose_reviewers(page: ParsedResponse, count: int, limit: int = DEFAULT_HISTORY_LIMIT) -> list[str]:
+    """Which reviewers' histories to request: a fixed coverage rule, not a judgement.
 
-    Reviewers reporting two or more reviews come first, most reviews first, then
-    those with no reported count; ties keep page order. A reviewer reporting a
-    single review is skipped, because that history would only repeat this
-    business. Nothing about review content, rating, or identity is used.
+    The aim is histories that can actually be compared, not the busiest
+    accounts. Reviewers are taken in this order:
+
+    1. Those whose reported review count is between 2 and ``limit``, in page
+       order. Their whole history should fit in one request. Page order is used
+       so that the choice is not ranked by activity.
+    2. Those with no reported count, in page order.
+    3. Those reporting more than ``limit`` reviews, fewest first. Their history
+       will be a partial window, and very prolific reviewers share popular
+       places for ordinary reasons, so they come last.
+
+    A reviewer reporting a single review is skipped: that history would only
+    repeat this business. Only the reported count and the position on the page
+    are used; nothing about review content, rating, or identity.
     """
     seen: set[str] = set()
     candidates = []
@@ -93,8 +126,12 @@ def choose_reviewers(page: ParsedResponse, count: int) -> list[str]:
             continue
         seen.add(reviewer.reviewer_id)
         reported = reviewer.reported_review_count
-        if reported is None or reported >= 2:
-            candidates.append((reported is None, -(reported or 0), position, reviewer.reviewer_id))
+        if reported is None:
+            candidates.append((2, 0, position, reviewer.reviewer_id))
+        elif 2 <= reported <= limit:
+            candidates.append((1, 0, position, reviewer.reviewer_id))
+        elif reported > limit:
+            candidates.append((3, reported, position, reviewer.reviewer_id))
     return [reviewer_id for *_, reviewer_id in sorted(candidates)[: max(count, 0)]]
 
 
@@ -117,12 +154,13 @@ def collect(
     search: Search,
     is_cached: IsCached,
     on_progress: Callable[[Collection], None] | None = None,
+    history_limit: int = DEFAULT_HISTORY_LIMIT,
 ) -> Collection:
     """Collect one review page and up to ``histories`` contributor histories.
 
     At most ``max_requests`` new SerpApi requests are attempted; saved responses
-    do not count. Collection stops at the first failure, keeping everything
-    collected so far.
+    do not count. Collection stops at the first failure of any kind, keeping
+    everything collected so far; it never raises.
     """
     result = Collection()
 
@@ -144,17 +182,24 @@ def collect(
         if page.page is None or page.page.business_id != data_id:
             raise ParseError("response is for a different business")
         result.parsed.append(page)
-        chosen = choose_reviewers(page, min(histories, MAX_HISTORIES))
+        chosen = choose_reviewers(page, min(histories, MAX_HISTORIES), history_limit)
         result.histories_planned = len(chosen)
         report()
         for number, contributor_id in enumerate(chosen, start=1):
-            history = parse_contributor_reviews(fetch(history_params(contributor_id)), f"history-{number}")
+            history = parse_contributor_reviews(
+                fetch(history_params(contributor_id, history_limit)), f"history-{number}"
+            )
             if history.history is None or history.history.reviewer_id != contributor_id:
                 raise ParseError("response is for a different contributor")
             result.parsed.append(history)
             result.histories_collected += 1
             report()
-    except (SerpApiError, ParseError, RequestBudgetExhausted) as error:
+    except Exception as error:  # noqa: BLE001
+        # Anything already parsed stays in `result`. The message is one of a
+        # fixed set; exception text is never kept, since it could quote data.
         result.stopped = describe_error(error)
-        report()
+        try:
+            report()
+        except Exception:  # noqa: BLE001
+            pass
     return result

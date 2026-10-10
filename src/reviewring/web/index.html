@@ -41,9 +41,13 @@
         <div class="row">
           <label for="histories" id="histories-label">Reviewer histories to collect</label>
           <input id="histories" name="histories" type="number" min="0" max="8" value="3" required>
+        </div>
+        <div class="row">
+          <label for="history-limit" id="history-limit-label">Entries to request per history</label>
+          <input id="history-limit" name="history-limit" type="number" min="10" max="200" value="50" required>
           <button type="submit">Check cost</button>
         </div>
-        <p class="muted">Histories are requested for the reviewers on the first page who report the most reviews. Each history is one request.</p>
+        <p class="muted">Each history is one request for one reviewer's most recent reviews, up to the entry limit; the service may return fewer. Reviewers whose whole history should fit in that limit are chosen first, in page order, and those reporting a single review are skipped. A history retrieved with one entry limit is not reused for another.</p>
       </form>
 
       <div id="confirm" class="confirm" role="group" aria-labelledby="confirm-text" hidden>

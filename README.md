@@ -6,6 +6,10 @@ ReviewRing uses SerpApi's Google Maps APIs to follow a business's reviewers acro
 
 It identifies patterns that may warrant a closer look. It does not determine that any review, reviewer, or business is fraudulent, and its output is not proof of wrongdoing.
 
+## Demo
+
+There is no hosted online demo yet. ReviewRing runs on your own computer: follow the quick start below, then open the address it prints in your browser. That address only works on the computer where the server is running.
+
 ## Quick start (no API key needed)
 
 Requires Python 3.11 or newer and [uv](https://docs.astral.sh/uv/).
@@ -15,7 +19,9 @@ uv sync
 uv run main.py
 ```
 
-Open http://127.0.0.1:8765 and choose **Synthetic demo**. It runs fully offline. Use `uv run main.py --port 9000` for another port.
+Leave that command running. In a browser on the same computer, go to `http://127.0.0.1:8765` and choose **Synthetic demo**. It runs fully offline. Use `uv run main.py --port 9000` for another port.
+
+`127.0.0.1` is your own machine, not a website. The address answers only while `main.py` is running, and only on that computer; opening it anywhere else shows "This site can't be reached".
 
 Run the tests (all offline, no key, no network):
 
@@ -73,7 +79,7 @@ Thirteen fictional reviewers and seven fictional businesses. Five reviewers shar
 
 1. Copy `.env.example` to `.env` and set `SERPAPI_API_KEY`. Never commit `.env`.
 2. Restart the dashboard and open the **Investigate** tab.
-3. **Search** for a business, **select** one from the list, choose how many reviewer histories to collect (0 to 8, default 3), and confirm.
+3. **Search** for a business, **select** one from the list, choose how many reviewer histories to collect (0 to 8, default 3) and how many entries to request per history (10 to 200, default 50), and confirm.
 
 Without a key the tab explains that one is required; nothing can be sent.
 
@@ -88,26 +94,30 @@ Without a key the tab explains that one is required; nothing can be sent.
 - Before anything is sent the page states the maximum and waits for you to confirm. The server enforces that same maximum; the confirmation cannot be skipped.
 - Responses already saved on your computer are reused and cost nothing.
 - It reads only the first page of reviews. It never follows further pages, never requests reviews for businesses found in histories, and never retries.
-- Histories are requested for the first-page reviewers who report the most reviews. A reviewer reporting a single review is skipped.
+- **A history is a window, not a full record.** Each history request asks for a reviewer's most recent reviews up to the entry limit, and the service may return fewer. The Coverage panel says how many retrieved histories look partial, of unknown completeness, or apparently complete, and how small a share of those reviewers' reported reviews was retrieved.
+- **Which reviewers are chosen.** First those whose reported review count fits within the entry limit, in page order; then those with no reported count; last those reporting more than the limit, fewest first. A reviewer reporting a single review is skipped. This favours histories that can actually be compared and avoids always picking the most prolific accounts, who share popular places for ordinary reasons. Only the reported count and page position are used.
+- A history saved with one entry limit is not reused for another limit; that request would be new.
 - If a request fails, collection stops and what was collected is still shown. A failed or timed-out request may still have used a credit.
-- With fewer than two histories the page says coordination cannot be assessed; it does not report an absence of overlap as a finding.
+- With fewer than two histories the page says coordination cannot be assessed. Otherwise, when nothing overlaps, it says "No repeated overlap observed in the retrieved review windows": only what was retrieved was compared.
+- If the result cannot be displayed, the page says so plainly and shows no summary; what was collected stays saved on your computer.
 
 ## What has been verified against the real service
 
-All figures are from `docs/EXPERIMENTS.md`. Eight SerpApi requests were made in total.
+All figures are from `docs/EXPERIMENTS.md`. Eleven SerpApi requests were attempted in total; ten succeeded.
 
 - **The API chain works.** Search returns business identifiers, a business's reviews return reviewer identifiers, a reviewer's history returns business identifiers, and those identifiers match across the three engines.
 - **The graph builds from real responses.** Six responses merged into 23 reviewers, 7 businesses, and 29 links in one connected component.
 - **No coordination was found.** No reviewer pair in that sample shares two or more businesses. Histories were collected for only 2 of 23 reviewers, so the sample neither supports nor rules out coordinated reviewing.
-- **The dashboard's live workflow ran once:** one business search and one first page of reviews (two requests, both successful), with zero reviewer histories.
+- **The dashboard's live workflow ran end to end:** one business search and one first page of reviews, then, in a later run, two reviewer histories for that page. Both histories returned exactly 10 entries for reviewers whose profiles report over 500 reviews, with no next-page marker, and the two shared no business. That is why histories are treated as windows.
+- **One live failure was observed:** a request rejected with an authentication error stopped collection at once, kept the page data, and showed a fixed message.
 
-Not verified against the real service: collecting reviewer histories through the dashboard, overlap detection in a live investigation, and failure handling. These are tested against a simulated SerpApi only.
+Not verified against the real service: the entry limit (`num` is documented by SerpApi but has not been sent in a live request by this project, so how many entries it actually returns is unknown), the revised reviewer selection, overlap detection on real data that contains overlap, and timeouts. These are tested against a simulated SerpApi only.
 
 ## Limitations
 
 - The real sample is far too small to measure overlap. The only overlap pattern in this repository is the synthetic one.
 - The overlap indicator is purely structural. It cannot tell arranged reviews from ordinary shared habits, and it sees only what was collected.
-- A live investigation sees one page of one business's reviews and a handful of histories.
+- A live investigation sees one page of one business's reviews and a handful of history windows. A business two reviewers share outside those windows is not seen.
 - No coordination score, community detection, temporal analysis, ring expansion, or adjusted rating is implemented.
 - Investigations are kept in memory and disappear when the server stops. Their saved responses remain and then appear in the collected sample, alongside any unrelated ones.
 - Browser checks were run in one desktop browser engine.

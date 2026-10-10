@@ -20,13 +20,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from reviewring import synthetic  # noqa: E402
-from reviewring.graph import build_graph, compute_metrics  # noqa: E402
+from reviewring.graph import build_graph, compute_metrics, history_coverage  # noqa: E402
 from reviewring.indicators import overlap_groups, shared_business_pairs  # noqa: E402
 from reviewring.loader import SavedDataError, load_saved_graph  # noqa: E402
 from reviewring.models import (  # noqa: E402
+    CONTRIBUTOR_REVIEWS_ENGINE,
     MAPS_REVIEWS_ENGINE,
     ContributorHistory,
     ParsedResponse,
+    ReviewerAttributes,
     ReviewObservation,
     ReviewsPage,
     Source,
@@ -360,19 +362,20 @@ class HeadlineTests(unittest.TestCase):
                 self.assertIn("cannot be assessed", explanation["assessment"]["statement"])
                 self.assertNotIn("No reviewer pair", json.dumps(explanation))
 
-    def test_partial_coverage_leads_with_the_limit(self):
+    def test_no_overlap_is_stated_only_for_the_retrieved_windows(self):
         pairs = [(marker_reviewer(n), MARKER_BUSINESS_A) for n in range(1, 7)]
-        explanation = self.view(pairs, [marker_reviewer(1), marker_reviewer(2)])["explanation"]
-        self.assertEqual(
-            explanation["headline"],
-            "Coordination can be assessed for only 2 of 6 reviewers. No overlap was found among those 2.",
-        )
-        self.assertIn("does not rule coordination out", explanation["assessment"]["statement"])
-
-    def test_full_coverage_may_state_that_no_pair_overlaps(self):
-        pairs = [(marker_reviewer(1), MARKER_BUSINESS_A), (marker_reviewer(2), MARKER_BUSINESS_A)]
-        explanation = self.view(pairs, [marker_reviewer(1), marker_reviewer(2)])["explanation"]
-        self.assertEqual(explanation["headline"], "No reviewer pair shares 2 or more businesses.")
+        for histories in ([marker_reviewer(1), marker_reviewer(2)], [marker_reviewer(n) for n in range(1, 7)]):
+            with self.subTest(histories=len(histories)):
+                explanation = self.view(pairs, histories)["explanation"]
+                self.assertEqual(explanation["headline"], "No repeated overlap observed in the retrieved review windows.")
+                statement = explanation["assessment"]["statement"]
+                self.assertIn("outside the retrieved windows could not be compared", statement)
+                self.assertIn("does not rule coordination out", statement)
+                text = json.dumps(explanation)
+                for overclaim in ("No reviewer pair shares", "No overlap was found", "no overlap exists"):
+                    self.assertNotIn(overclaim, text)
+        partial = self.view(pairs, [marker_reviewer(1), marker_reviewer(2)])["explanation"]["assessment"]["statement"]
+        self.assertIn("The other 4 reviewers could not be compared", partial)
 
     def test_overlap_is_reported_as_a_pattern_whatever_the_coverage(self):
         pairs = [(marker_reviewer(n), b) for n in (1, 2) for b in (MARKER_BUSINESS_A, MARKER_BUSINESS_B)]
@@ -404,6 +407,155 @@ class HeadlineTests(unittest.TestCase):
         text = json.dumps(view)
         for private in (MARKER_BUSINESS_A, MARKER_BUSINESS_B, "10000000000000000"):
             self.assertNotIn(private, text)
+
+
+class HistoryWindowTests(unittest.TestCase):
+    """A retrieved history is a window. Coverage must say how complete it appears, without certainty."""
+
+    PAGE_BUSINESS = MARKER_BUSINESS_A
+
+    def graph(self, histories, page_counts=None):
+        """``histories``: reviewer number -> (entries, reported_total, requested_limit, next_token)."""
+        page_counts = page_counts or {}
+        reviewers = sorted(set(histories) | set(page_counts) | {90, 91, 92})
+        responses = [
+            ParsedResponse(
+                "page.json",
+                MAPS_REVIEWS_ENGINE,
+                observations=[ReviewObservation(marker_reviewer(n), self.PAGE_BUSINESS, Source("page.json", MAPS_REVIEWS_ENGINE, 1)) for n in reviewers],
+                reviewer_attributes=[ReviewerAttributes(marker_reviewer(n), "page.json", reported_review_count=c) for n, c in page_counts.items()],
+            )
+        ]
+        for n, (entries, reported, limit, token) in histories.items():
+            name = f"h{n}.json"
+            responses.append(
+                ParsedResponse(
+                    name,
+                    CONTRIBUTOR_REVIEWS_ENGINE,
+                    observations=[
+                        ReviewObservation(marker_reviewer(n), f"0x0000000000{n:04d}:0x{i:04d}", Source(name, CONTRIBUTOR_REVIEWS_ENGINE, i + 1))
+                        for i in range(entries)
+                    ],
+                    history=ContributorHistory(marker_reviewer(n), name, entries, token, limit, reported),
+                )
+            )
+        return build_graph(responses)
+
+    def statuses(self, histories, page_counts=None):
+        return {int(row.reviewer_id[-2:]): row.status for row in history_coverage(self.graph(histories, page_counts))}
+
+    def test_ten_entries_of_five_hundred_with_no_next_page_marker_is_partial(self):
+        row = history_coverage(self.graph({1: (10, 520, None, None)}))[0]
+        self.assertEqual((row.status, row.entries_returned, row.unique_businesses), ("partial", 10, 10))
+        self.assertEqual((row.limit, row.limit_reached, row.pagination_offered, row.reported_total), (10, True, False, 520))
+
+    def test_coverage_is_classified_without_claiming_certainty(self):
+        self.assertEqual(
+            self.statuses({
+                1: (10, None, None, None),   # window filled, total unknown
+                2: (7, 6, None, None),       # reported one fewer than returned: within tolerance
+                3: (3, None, 50, None),      # well under the requested limit, nothing says more
+                4: (4, 4, None, "token"),    # a further page is offered
+                5: (50, None, 50, None),     # requested 50 and got 50: unknown
+                6: (50, 51, 50, None),       # reported total within tolerance of what was returned
+                7: (50, 53, 50, None),       # reported total clearly above what was returned
+                8: (0, None, None, None),    # empty history
+            }),
+            {1: "unknown", 2: "apparently_complete", 3: "apparently_complete", 4: "partial",
+             5: "unknown", 6: "apparently_complete", 7: "partial", 8: "apparently_complete"},
+        )
+
+    def test_page_reported_count_is_used_only_when_the_history_gives_none_and_it_is_unambiguous(self):
+        self.assertEqual(self.statuses({1: (10, None, None, None)}, page_counts={1: 300}), {1: "partial"})
+        self.assertEqual(self.statuses({1: (10, 11, None, None)}, page_counts={1: 300}), {1: "apparently_complete"})
+        graph = self.graph({1: (10, None, None, None)}, page_counts={1: 300})
+        graph.reviewer_attributes[marker_reviewer(1)].append(ReviewerAttributes(marker_reviewer(1), "other.json", reported_review_count=12))
+        self.assertEqual(history_coverage(graph)[0].status, "unknown")
+
+    def test_largest_window_is_used_when_a_reviewer_has_two_histories(self):
+        graph = self.graph({1: (10, 40, None, None)})
+        graph.histories[marker_reviewer(1)].append(ContributorHistory(marker_reviewer(1), "wide.json", 40, None, 50, 40))
+        row = history_coverage(graph)[0]
+        self.assertEqual((row.status, row.entries_returned, row.limit), ("apparently_complete", 40, 50))
+
+    def test_view_states_the_sampled_fraction_coarsely_for_a_few_reviewers(self):
+        view = build_view(self.graph({1: (10, 520, None, None), 2: (10, 730, None, None)}), INVESTIGATION)
+        windows = view["coverage"]["history_windows"]
+        self.assertEqual((windows["retrieved"], windows["partial"], windows["unknown"], windows["apparently_complete"]), (2, 2, 0, 0))
+        self.assertEqual((windows["entries_retrieved"], windows["entries_reported"], windows["share"]), (20, None, "under 5%"))
+        self.assertIn("2 review histories retrieved: 2 partial.", windows["statement"])
+        self.assertIn("at most 10 entries", windows["statement"])
+        self.assertIn("under 5% of the reviews these reviewers report", windows["statement"])
+        self.assertIn("does not mean a history is complete", windows["statement"])
+        # Reviewer-level reported totals never reach the browser for fewer than five reviewers.
+        text = json.dumps(view)
+        for private in ("520", "730", "1250", "10000000000000000", "0x0000"):
+            self.assertNotIn(private, text)
+        explanation = view["explanation"]
+        self.assertEqual(explanation["headline"], "No repeated overlap observed in the retrieved review windows.")
+        self.assertIn("2 of which are partial or of unknown completeness", explanation["assessment"]["statement"])
+        self.assertTrue(any("limited window" in point and "under 5%" in point for point in explanation["points"]))
+
+    def test_view_gives_exact_aggregate_totals_only_from_five_histories(self):
+        histories = {n: (10, 100, None, None) for n in range(1, 6)}
+        windows = build_view(self.graph(histories), INVESTIGATION)["coverage"]["history_windows"]
+        self.assertEqual((windows["entries_retrieved"], windows["entries_reported"], windows["share"]), (50, 500, "between 5% and 25%"))
+        self.assertIn("50 entries of about 500 reported", windows["statement"])
+
+    def test_unknown_totals_and_complete_histories_are_worded_accordingly(self):
+        unknown = build_view(self.graph({1: (10, None, None, None), 2: (10, None, None, None)}), INVESTIGATION)
+        windows = unknown["coverage"]["history_windows"]
+        self.assertEqual((windows["unknown"], windows["share"]), (2, None))
+        self.assertIn("how many reviews these reviewers have is not known", windows["statement"])
+        complete = build_view(self.graph({1: (3, 3, 50, None), 2: (4, 4, 50, None)}), INVESTIGATION)
+        self.assertIn("2 apparently complete", complete["coverage"]["history_windows"]["statement"])
+        self.assertFalse(any("limited window" in point for point in complete["explanation"]["points"]))
+        self.assertNotIn("partial or of unknown completeness", complete["explanation"]["assessment"]["statement"])
+        none = build_view(self.graph({}), INVESTIGATION)["coverage"]["history_windows"]
+        self.assertEqual(none["statement"], "No review histories were retrieved.")
+
+    def test_one_retrieved_history_is_worded_in_the_singular(self):
+        view = build_view(self.graph({1: (10, 520, None, None)}), INVESTIGATION)
+        statement = view["coverage"]["history_windows"]["statement"]
+        self.assertIn("1 review history retrieved: 1 partial.", statement)
+        self.assertIn("The request asked for at most 10 entries.", statement)
+        self.assertIn("The retrieved window holds 10 entries, under 5% of the reviews this reviewer reports.", statement)
+        for plural in ("these reviewers", "windows hold", "Each request", "histories retrieved"):
+            self.assertNotIn(plural, statement)
+        point = next(p for p in view["explanation"]["points"] if "limited window" in p)
+        self.assertIn("1 of the 1 retrieved history is a limited window", point)
+        self.assertIn("the window covers under 5% of the reviews that reviewer reports", point)
+        unknown = build_view(self.graph({1: (10, None, None, None)}), INVESTIGATION)["coverage"]["history_windows"]["statement"]
+        self.assertIn("how many reviews this reviewer has is not known", unknown)
+        single_entry = build_view(self.graph({1: (1, 1, None, None)}), INVESTIGATION)["coverage"]["history_windows"]["statement"]
+        self.assertIn("The retrieved window holds 1 entry", single_entry)
+        # A missing next-page marker is never presented as completeness, whatever the count.
+        self.assertIn("does not mean a history is complete", statement)
+
+    def test_histories_requested_with_different_entry_limits_are_described_plainly(self):
+        view = build_view(self.graph({1: (10, 520, None, None), 2: (50, 730, 50, None), 3: (4, 4, 50, None)}), INVESTIGATION)
+        statement = view["coverage"]["history_windows"]["statement"]
+        self.assertEqual(view["coverage"]["history_windows"]["entry_limits"], [10, 50])
+        self.assertIn("The requests used different entry limits, from 10 to 50 entries per history.", statement)
+        self.assertNotIn("at most 10 to 50", statement)
+        self.assertIn("3 review histories retrieved: 2 partial, 1 apparently complete.", statement)
+        self.assertIn("these reviewers report", statement)
+        same = build_view(self.graph({1: (10, 520, 50, None), 2: (50, 730, 50, None)}), INVESTIGATION)
+        self.assertIn("Each request asked for at most 50 entries.", same["coverage"]["history_windows"]["statement"])
+
+    def test_overlap_within_windows_is_worded_as_such(self):
+        graph = self.graph({1: (10, 520, None, None), 2: (10, 730, None, None)})
+        shared = "0x00000000000000ee:0x00000000000000e1"
+        extra = ParsedResponse(
+            "x.json", CONTRIBUTOR_REVIEWS_ENGINE,
+            observations=[ReviewObservation(marker_reviewer(n), shared, Source("x.json", CONTRIBUTOR_REVIEWS_ENGINE, n)) for n in (1, 2)],
+        )
+        for pair, edge in build_graph([extra]).edges.items():
+            graph.edges[pair] = edge
+        explanation = build_view(graph, INVESTIGATION)["explanation"]
+        self.assertIn("1 reviewer group shares 2 or more businesses", explanation["headline"])
+        self.assertIn("within the retrieved windows", explanation["assessment"]["statement"])
+        self.assertIn("not a finding of coordination", explanation["assessment"]["statement"])
 
 
 class ModeIsolationTests(SavedDataTestCase):

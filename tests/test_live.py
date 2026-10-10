@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from reviewring import app, live  # noqa: E402
 from reviewring.investigation import (  # noqa: E402
+    DEFAULT_HISTORY_LIMIT,
     choose_reviewers,
     collect,
     describe_error,
@@ -34,7 +35,9 @@ from reviewring.investigation import (  # noqa: E402
     review_page_params,
     search_params,
 )
+from reviewring.models import MAPS_REVIEWS_ENGINE, ParsedResponse, ReviewerAttributes  # noqa: E402
 from reviewring.parsers import parse_maps_reviews  # noqa: E402
+from reviewring.serpapi_client import cache_key  # noqa: E402
 from reviewring.serpapi_client import MissingApiKeyError, SerpApiError  # noqa: E402
 
 BUSINESS = "0x00000000000000aa:0x00000000000000a1"
@@ -109,8 +112,8 @@ class FakeSerpApi:
             }
         number = int(params["contributor_id"][-2:])
         entries = [{"review_id": f"page-{number}", "rating": 5, "place_info": {"data_id": BUSINESS, "type": "Bakery"}}]
-        # Reviewers 2 and 6 both also reviewed one other business.
-        other = SHARED_BUSINESS if number in (2, 6) else f"0x00000000000000dd:0x000000000000{number:04x}"
+        # Reviewers 2 and 3 both also reviewed one other business.
+        other = SHARED_BUSINESS if number in (2, 3) else f"0x00000000000000dd:0x000000000000{number:04x}"
         entries.append({"review_id": f"other-{number}", "rating": 4, "snippet": PRIVATE_TEXT, "place_info": {"data_id": other, "type": "Cafe"}})
         return {"search_parameters": dict(params), "contributor": {"name": PRIVATE_NAME}, "reviews": entries}
 
@@ -129,17 +132,76 @@ class CollectionTests(unittest.TestCase):
     def run_collect(self, histories: int, max_requests: int):
         return collect(BUSINESS, histories, max_requests, self.api.search, self.api.is_cached)
 
-    def test_reviewers_are_chosen_by_reported_count_then_unknown_never_single_review(self):
+    def test_reviewers_whose_history_fits_come_first_in_page_order(self):
         page = parse_maps_reviews(self.api.respond(review_page_params(BUSINESS)), "page")
-        self.assertEqual(choose_reviewers(page, 10), [reviewer(n) for n in (2, 6, 3, 5, 4)])
-        self.assertEqual(choose_reviewers(page, 2), [reviewer(2), reviewer(6)])
+        # Reported counts 5, 3, 2, 4 all fit the default window: page order, not most active first.
+        # Then the reviewer with no reported count. The single-review reviewer is never chosen.
+        self.assertEqual(choose_reviewers(page, 10), [reviewer(n) for n in (2, 3, 5, 6, 4)])
+        self.assertEqual(choose_reviewers(page, 2), [reviewer(2), reviewer(3)])
         self.assertEqual(choose_reviewers(page, 0), [])
+
+    def test_prolific_reviewers_come_last_least_truncated_first(self):
+        counts = {1: 900, 2: 520, 3: 7, 4: None, 5: 1, 6: 12, 7: 10, 8: 60}
+        page = ParsedResponse(
+            "page",
+            MAPS_REVIEWS_ENGINE,
+            reviewer_attributes=[ReviewerAttributes(reviewer(n), "page", reported_review_count=c) for n, c in counts.items()],
+        )
+        # Window of 10: reviewers 3 and 7 fit (page order); 4 is unknown; then 12, 60, 520, 900.
+        self.assertEqual(choose_reviewers(page, 10, limit=10), [reviewer(n) for n in (3, 7, 4, 6, 8, 2, 1)])
+        # A larger window changes who fits, never by ranking the busiest first.
+        self.assertEqual(choose_reviewers(page, 4, limit=100), [reviewer(n) for n in (3, 6, 7, 8)])
+        self.assertEqual(choose_reviewers(page, 10, limit=10), choose_reviewers(page, 10, limit=10))
+
+    def test_a_reviewer_listed_twice_is_chosen_once(self):
+        page = ParsedResponse(
+            "page",
+            MAPS_REVIEWS_ENGINE,
+            reviewer_attributes=[ReviewerAttributes(reviewer(2), "page", reported_review_count=4)] * 2,
+        )
+        self.assertEqual(choose_reviewers(page, 5), [reviewer(2)])
+
+    def test_entry_limit_is_part_of_the_request_and_its_cache_identity(self):
+        default = history_params("c1")
+        self.assertEqual(default, {"engine": "google_maps_contributor_reviews", "contributor_id": "c1"})
+        self.assertEqual(history_params("c1", 10), default)  # the API default sends no `num`
+        wider = history_params("c1", 50)
+        self.assertEqual(wider, {"engine": "google_maps_contributor_reviews", "contributor_id": "c1", "num": 50})
+        self.assertEqual(len({cache_key(default), cache_key(wider), cache_key(history_params("c1", 200))}), 3)
+        for bad in (0, 9, 201, 1000, -5):
+            with self.subTest(limit=bad):
+                with self.assertRaises(ValueError):
+                    history_params("c1", bad)
+
+    def test_unexpected_error_keeps_what_was_parsed_and_never_raises(self):
+        original, calls = self.api.search, {"n": 0}
+
+        def flaky(params):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise RuntimeError(f"boom {reviewer(3)} {BUSINESS}")
+            return original(params)
+
+        result = collect(BUSINESS, 3, 4, flaky, self.api.is_cached)
+        self.assertEqual((len(result.parsed), result.histories_collected, self.api.new_requests), (2, 1, 2))
+        self.assertEqual(result.stopped, "Collection stopped because of an unexpected error.")
+
+        def broken_progress(collection):
+            raise RuntimeError("progress failed")
+
+        result = collect(BUSINESS, 1, 2, self.api.search, self.api.is_cached, broken_progress)
+        self.assertTrue(result.parsed)
+        self.assertIn("unexpected", result.stopped)
 
     def test_sends_exactly_one_page_request_and_the_chosen_histories(self):
         result = self.run_collect(histories=2, max_requests=3)
         self.assertEqual(
             self.api.calls,
-            [review_page_params(BUSINESS), history_params(reviewer(2)), history_params(reviewer(6))],
+            [
+                review_page_params(BUSINESS),
+                history_params(reviewer(2), DEFAULT_HISTORY_LIMIT),
+                history_params(reviewer(3), DEFAULT_HISTORY_LIMIT),
+            ],
         )
         self.assertEqual((result.requests_sent, result.cache_hits, result.histories_collected, result.stopped), (3, 0, 2, None))
         self.assertEqual(len(result.parsed), 3)
@@ -166,7 +228,7 @@ class CollectionTests(unittest.TestCase):
         self.assertIn("budget", result.stopped)
 
     def test_saved_responses_are_reused_and_do_not_count(self):
-        self.api.saved |= {key(review_page_params(BUSINESS)), key(history_params(reviewer(2)))}
+        self.api.saved |= {key(review_page_params(BUSINESS)), key(history_params(reviewer(2), DEFAULT_HISTORY_LIMIT))}
         result = self.run_collect(histories=2, max_requests=1)
         self.assertEqual((self.api.new_requests, result.requests_sent, result.cache_hits), (1, 1, 2))
         self.assertEqual((result.histories_collected, result.stopped), (2, None))
@@ -289,10 +351,10 @@ class LiveStateTests(unittest.TestCase):
                 self.assert_error(400, self.state.plan_investigation, ref, histories)
 
     def test_saved_page_makes_the_plan_exact(self):
-        self.investigate(histories=2)  # saves the page and histories for reviewers 2 and 6
+        self.investigate(histories=2)  # saves the page and histories for reviewers 2 and 3
         sent = self.api.new_requests
         ref = self.search()[0]["ref"]
-        plan = self.state.plan_investigation(ref, 3)  # reviewer 3's history is new
+        plan = self.state.plan_investigation(ref, 3)  # reviewer 5's history is new
         self.assertEqual((plan["max_requests"], self.api.new_requests), (1, sent))
         self.assertIn("2 of 3 reviewer histories are already saved", plan["statement"])
         plan = self.state.plan_investigation(ref, 2)
@@ -320,6 +382,73 @@ class LiveStateTests(unittest.TestCase):
         text = json.dumps(status)
         for private in PRIVATE:
             self.assertNotIn(private, text)
+
+    def test_entry_limit_is_validated_stated_and_counted_in_the_plan(self):
+        ref = self.search()[0]["ref"]
+        for bad in (9, 201, 0, -1, "50", 50.0, True, [50]):
+            with self.subTest(limit=bad):
+                self.assert_error(400, self.state.plan_investigation, ref, 2, bad)
+        plan = self.state.plan_investigation(ref, 2)
+        self.assertEqual(plan["history_limit"], DEFAULT_HISTORY_LIMIT)
+        self.assertIn(f"up to {DEFAULT_HISTORY_LIMIT} entries; the API may return fewer", plan["statement"])
+        self.assertNotIn("entries", self.state.plan_investigation(ref, 0)["statement"])
+        info = self.state.session_info()
+        self.assertEqual(
+            (info["min_history_limit"], info["default_history_limit"], info["max_history_limit"]), (10, 50, 200)
+        )
+
+    def test_a_history_saved_at_one_entry_limit_is_not_reused_at_another(self):
+        self.investigate(histories=2)  # default limit
+        sent = self.api.new_requests
+        ref = self.search()[0]["ref"]
+        self.assertEqual(self.state.plan_investigation(ref, 2)["max_requests"], 0)
+        other = self.state.plan_investigation(ref, 2, 10)
+        self.assertEqual(other["max_requests"], 2)  # same reviewers, different request: two new requests
+        self.assertIn("0 of 2 reviewer histories are already saved", other["statement"])
+        started = self.state.start_investigation(other["plan"])
+        self.state._investigations[started["investigation"]].thread.join(timeout=10)
+        status = self.state.investigation_status(started["investigation"])
+        self.assertEqual((self.api.new_requests - sent, status["history_limit"], status["state"]), (2, 10, "complete"))
+        # The earlier saved responses are still there and still reused at their own limit.
+        self.assertEqual(self.state.plan_investigation(ref, 2)["max_requests"], 0)
+        requested = [c for c in self.api.calls if c["engine"] == "google_maps_contributor_reviews"]
+        self.assertEqual([c.get("num") for c in requested], [50, 50, None, None])
+
+    def test_unexpected_error_during_collection_gives_a_truthful_partial_result(self):
+        ref = self.search()[0]["ref"]
+        plan = self.state.plan_investigation(ref, 3)
+        original, calls = self.state._search, {"n": 0}
+
+        def flaky(params):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise RuntimeError(f"boom {reviewer(3)} {BUSINESS}")
+            return original(params)
+
+        self.state._search = flaky
+        started = self.state.start_investigation(plan["plan"])
+        self.state._investigations[started["investigation"]].thread.join(timeout=10)
+        status = self.state.investigation_status(started["investigation"])
+        self.assertEqual((status["state"], status["histories_collected"], status["responses_collected"]), ("partial", 1, 2))
+        self.assertEqual(status["stopped"], "Collection stopped because of an unexpected error.")
+        self.assertEqual(status["view"]["coverage"]["reviewers_with_history"], 1)
+        self.assertFalse(self.state._running)
+        for private in PRIVATE + ["boom", "Traceback", "RuntimeError"]:
+            self.assertNotIn(private, json.dumps(status))
+
+    def test_view_construction_failure_is_reported_without_claiming_a_view(self):
+        ref = self.search()[0]["ref"]
+        plan = self.state.plan_investigation(ref, 2)
+        with mock.patch.object(live, "build_view", side_effect=KeyError(f"{BUSINESS} {reviewer(2)}")):
+            started = self.state.start_investigation(plan["plan"])
+            self.state._investigations[started["investigation"]].thread.join(timeout=10)
+        status = self.state.investigation_status(started["investigation"])
+        self.assertEqual((status["state"], status["responses_collected"], status["histories_collected"]), ("unviewable", 3, 2))
+        self.assertNotIn("view", status)
+        self.assertIsNone(status["stopped"])  # collection itself did not fail
+        self.assertFalse(self.state._running)
+        for private in PRIVATE + ["KeyError", "Traceback"]:
+            self.assertNotIn(private, json.dumps(status))
 
     def test_too_little_data_says_coordination_cannot_be_assessed(self):
         for histories in (0, 1):
@@ -436,8 +565,10 @@ class LiveHttpTests(unittest.TestCase):
         status, found = self.post("/api/search", {"plan": plan["plan"]})
         self.assertEqual((status, len(found["businesses"]), self.api.new_requests), (200, 2, 1))
 
-        status, plan = self.post("/api/investigations/plan", {"business": found["businesses"][0]["ref"], "histories": 2})
+        self.assertEqual(self.post("/api/investigations/plan", {"business": found["businesses"][0]["ref"], "histories": 2, "history_limit": 500})[0], 400)
+        status, plan = self.post("/api/investigations/plan", {"business": found["businesses"][0]["ref"], "histories": 2, "history_limit": 20})
         self.assertEqual((status, plan["max_requests"], plan["business"], self.api.new_requests), (200, 3, "Alpha Bakery", 1))
+        self.assertEqual(plan["history_limit"], 20)
         status, started = self.post("/api/investigations", {"plan": plan["plan"]})
         self.assertEqual(status, 200)
         self.state._investigations[started["investigation"]].thread.join(timeout=10)
@@ -446,6 +577,7 @@ class LiveHttpTests(unittest.TestCase):
         result = json.loads(text)
         self.assertEqual((status, result["state"], result["requests_sent"], self.api.new_requests), (200, "complete", 3, 4))
         self.assertEqual(result["view"]["metrics"]["pairs_sharing_two"], 1)
+        self.assertEqual([c.get("num") for c in self.api.calls if "contributor_id" in c], [20, 20])
         for private in PRIVATE + ["api_key"]:
             self.assertNotIn(private, text)
 

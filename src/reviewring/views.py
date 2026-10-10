@@ -19,7 +19,16 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from reviewring.graph import BusinessCoverage, Graph, business_coverage, compute_metrics
+from reviewring.graph import (
+    HISTORY_APPARENTLY_COMPLETE,
+    HISTORY_PARTIAL,
+    HISTORY_UNKNOWN,
+    BusinessCoverage,
+    Graph,
+    business_coverage,
+    compute_metrics,
+    history_coverage,
+)
 from reviewring.indicators import MIN_SHARED_BUSINESSES, OverlapGroup, overlap_groups
 from reviewring.loader import RAW_DIR, SavedDataError, load_saved_graph
 from reviewring.synthetic import build_synthetic_graph, display_names
@@ -40,6 +49,8 @@ MIN_AGGREGATE_GROUP_SIZE = 5
 def _plural(count: int, noun: str) -> str:
     if count == 1:
         return f"1 {noun}"
+    if noun.endswith("y"):
+        return f"{count} {noun[:-1]}ies"
     return f"{count} {noun}es" if noun.endswith("s") else f"{count} {noun}s"
 
 
@@ -77,6 +88,82 @@ def _distribution(ratings: list[int | float]) -> list[dict[str, Any]]:
     return [{"rating": rating, "count": counts[rating]} for rating in sorted(counts, reverse=True)]
 
 
+def _share_band(fraction: float) -> str:
+    """A coarse share, so that a few reviewers' reported totals cannot be worked back."""
+    if fraction < 0.05:
+        return "under 5%"
+    if fraction < 0.25:
+        return "between 5% and 25%"
+    if fraction < 0.75:
+        return "between 25% and 75%"
+    return "over 75%"
+
+
+def _history_windows(graph: Graph) -> dict[str, Any]:
+    """How much of the retrieved reviewers' histories was actually retrieved, in aggregate.
+
+    A retrieved history is a window, not necessarily the whole history. Exact
+    reported totals are reviewer-level data, so they are summed and shown only
+    when enough histories are involved; otherwise a coarse share is given.
+    """
+    rows = history_coverage(graph)
+    count = len(rows)
+    by_status = Counter(row.status for row in rows)
+    retrieved = sum(row.entries_returned for row in rows)
+    totals_known = count > 0 and all(row.reported_total is not None for row in rows)
+    reported = sum(max(row.reported_total, row.entries_returned) for row in rows) if totals_known else None
+    share = _share_band(retrieved / reported) if reported else None
+    exact = count >= MIN_AGGREGATE_GROUP_SIZE
+    limits = sorted({row.limit for row in rows})
+
+    if count == 0:
+        statement = "No review histories were retrieved."
+    else:
+        described = [
+            (by_status[HISTORY_PARTIAL], "partial"),
+            (by_status[HISTORY_UNKNOWN], "of unknown completeness"),
+            (by_status[HISTORY_APPARENTLY_COMPLETE], "apparently complete"),
+        ]
+        statement = (
+            f"{count} review {'history' if count == 1 else 'histories'} retrieved: "
+            + ", ".join(f"{number} {label}" for number, label in described if number)
+            + "."
+        )
+        one = count == 1
+        if one:
+            statement += f" The request asked for at most {limits[0]} entries."
+        elif len(limits) == 1:
+            statement += f" Each request asked for at most {limits[0]} entries."
+        else:
+            statement += (
+                f" The requests used different entry limits, from {limits[0]} to {limits[-1]} entries per history."
+            )
+        holds = f" The retrieved {'window holds' if one else 'windows hold'} {_plural(retrieved, 'entry')}"
+        whose = "this reviewer reports" if one else "these reviewers report"
+        if reported and exact:
+            statement += f"{holds} of about {reported} reported ({share})."
+        elif share:
+            statement += f"{holds}, {share} of the reviews {whose}."
+        else:
+            statement += f"{holds}; how many reviews {'this reviewer has' if one else 'these reviewers have'} is not known."
+        statement += (
+            " A history counts as partial when the reviewer reports more reviews than were returned or a "
+            "further page is offered. Reported totals are approximate, and the absence of a next-page "
+            "marker does not mean a history is complete."
+        )
+    return {
+        "retrieved": count,
+        "partial": by_status[HISTORY_PARTIAL],
+        "unknown": by_status[HISTORY_UNKNOWN],
+        "apparently_complete": by_status[HISTORY_APPARENTLY_COMPLETE],
+        "entry_limits": limits,
+        "entries_retrieved": retrieved,
+        "entries_reported": reported if exact else None,
+        "share": share,
+        "statement": statement,
+    }
+
+
 def _coverage_section(graph: Graph, coverage: list[BusinessCoverage], labels: dict[str, str]) -> dict[str, Any]:
     rows = []
     for row in coverage:
@@ -100,6 +187,7 @@ def _coverage_section(graph: Graph, coverage: list[BusinessCoverage], labels: di
         "history_only_businesses": sum(1 for row in coverage if row.history_only),
         "reviewers": reviewers,
         "reviewers_with_history": len(graph.histories),
+        "history_windows": _history_windows(graph),
         "business_rows": rows,
     }
 
@@ -341,21 +429,32 @@ def _explanation(mode: str, metrics: Any, coverage: dict[str, Any], indicators: 
     elif compared < 2:
         # Nothing could be compared: an absence of overlap here is not a result.
         headline = "Coordination cannot be assessed from this data."
-    elif history_gap:
-        headline = (
-            f"Coordination can be assessed for only {compared} of {coverage['reviewers']} "
-            f"reviewers. No overlap was found among those {compared}."
-        )
     else:
-        headline = f"No reviewer pair shares {minimum} or more businesses."
+        # Never "no overlap": only the retrieved windows were compared.
+        headline = "No repeated overlap observed in the retrieved review windows."
+    windows = coverage["history_windows"]
+    limited = windows["partial"] + windows["unknown"]
     points = [
         f"{metrics.reviewer_pairs_sharing_a_business} reviewer pairs share at least one business. "
         "That is expected: reviewers were collected from business review pages, so everyone on "
         "a page shares that business.",
-        f"Review histories are collected for {coverage['reviewers_with_history']} of "
+        f"Review histories were retrieved for {coverage['reviewers_with_history']} of "
         f"{coverage['reviewers']} reviewers. For the other {history_gap}, only the business they "
         "were found on is known, so overlap among them cannot be seen yet.",
     ]
+    if limited:
+        points.append(
+            f"{limited} of the {windows['retrieved']} retrieved "
+            f"{'history is' if windows['retrieved'] == 1 else 'histories are'} a limited window "
+            "or of unknown completeness, not the reviewer's full history"
+            + (
+                f" (the {'window covers' if windows['retrieved'] == 1 else 'windows cover'} {windows['share']} "
+                f"of the reviews {'that reviewer reports' if windows['retrieved'] == 1 else 'those reviewers report'})"
+                if windows["share"]
+                else ""
+            )
+            + ". A business shared outside a retrieved window would not be seen."
+        )
     if indicators["groups"]:
         caution = (
             "Sharing several unrelated businesses is a structural pattern worth a closer look. "
@@ -394,18 +493,25 @@ def _explanation(mode: str, metrics: Any, coverage: dict[str, Any], indicators: 
         assessment = {
             "assessable": True,
             "statement": (
-                f"Among the {compared} reviewers with a collected history, "
+                f"Among the {compared} reviewers with a retrieved history, "
                 f"{_plural(indicators['pairs'], 'pair')} "
-                f"{'shares' if indicators['pairs'] == 1 else 'share'} {minimum} or more businesses. That is "
-                "a pattern to look into, not a finding of coordination."
+                f"{'shares' if indicators['pairs'] == 1 else 'share'} {minimum} or more businesses "
+                "within the retrieved windows. That is a pattern to look into, not a finding of coordination."
             ),
         }
     else:
         assessment = {
             "assessable": True,
             "statement": (
-                f"No overlap was found among the {compared} reviewers with a collected history. "
-                f"The other {history_gap} could not be compared, so this does not rule "
+                f"No repeated overlap was observed among the {compared} reviewers with a retrieved history"
+                + (
+                    f", {limited} of which {'is' if limited == 1 else 'are'} partial or of unknown completeness"
+                    if limited
+                    else ""
+                )
+                + ". "
+                + (f"The other {history_gap} reviewers could not be compared, and b" if history_gap else "B")
+                + "usinesses outside the retrieved windows could not be compared, so this does not rule "
                 "coordination out."
             ),
         }

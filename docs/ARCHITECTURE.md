@@ -162,9 +162,25 @@ Responses are parsed by the existing parsers and merged by `build_graph`, then s
 - A plan is single-use, expires after 10 minutes, and records the maximum number of new requests. Execution accepts only a plan the server issued, and enforces the plan's number, so the confirmation shown in the browser cannot be skipped or enlarged.
 - Saved responses are reused and not counted. When the review page is already saved, the plan reads it locally and states exactly how many histories are new; otherwise it states the maximum and says the rest is unknown.
 - One server process attempts at most 30 new requests in total, as a safety net.
-- Collection stops at the first failure and keeps what it has. One investigation runs at a time.
+- Collection stops at the first failure of any kind and keeps what it has; `collect` never raises. One investigation runs at a time.
+- Final states: *complete*; *partial* (collection stopped early, a view of what was collected is shown); *failed* (nothing was collected); *unviewable* (responses were collected and saved, but the view could not be built, so none is offered). Messages are fixed text; exception text never reaches the browser.
 
-Reviewer selection is a fixed rule: first-page reviewers reporting two or more reviews, most first, then those with no reported count, in page order. A reviewer reporting one review is skipped because that history would only repeat the business. No content, rating, or identity is used.
+Reviewer selection is a fixed coverage rule, not a ranking of suspicion (`choose_reviewers`). In order: reviewers whose reported review count is between 2 and the entry limit, in page order; then those with no reported count, in page order; then those reporting more than the limit, fewest first. A reviewer reporting one review is skipped because that history would only repeat the business. The aim is histories that can be compared in full. Prolific reviewers come last because their histories are returned as small windows and because they share popular places for ordinary reasons. Only the reported count and the page position are used.
+
+### Contributor history windows
+
+A retrieved history is a window onto a reviewer's reviews, and the code never treats it as complete by default.
+
+- **Documented contract** (SerpApi, checked 2026-10-10): `contributor_id` and `engine` are required; `num` is optional, "10 (default)", "should not be larger than 200". The documentation lists no `next_page_token` parameter and shows no pagination object, although a release note mentions a `serpapi_pagination` block.
+- **Observed behaviour:** with no `num`, two histories returned exactly 10 entries each for profiles reporting over 500 reviews, with no pagination object. An earlier history returned 7 entries for a reviewer whose review page reported 6. `num` itself has not been sent in a live request by this project.
+- **Entry limit:** `history_params(contributor_id, limit)` sends `num` only when the limit differs from the API default of 10, so default requests are identical to the verified ones and their saved responses are still reused. Any other limit is part of the request and of its cache key; a history saved at one limit is never reused or overwritten at another. Limits: 10 to 200, default 50. A larger window collects and stores more personal data per reviewer, which is why the default is not the maximum. `num` is a ceiling: nothing assumes that many entries come back.
+- **Coverage per history** (`graph.history_coverage`): entries returned, distinct businesses, the limit in force, whether the limit was reached, whether a further page was offered, and a reported total when available (the profile's own count in the history response, else an unambiguous count from a review page).
+- **Status**, deliberately not a claim of certainty:
+  - *partial*: a further page is offered, or the reported total exceeds the entries returned by more than one;
+  - *unknown*: the window was filled and no total is available;
+  - *apparently complete*: nothing observed says more exists.
+  A missing next-page marker is never taken as completeness. Reported totals are approximate, so a difference of one is ignored.
+- **What the page shows:** counts of retrieved histories by status, the entry limit, entries retrieved, and the share of the reported reviews they cover. With fewer than five histories the share is given only as a coarse band and the reported total is withheld, since reported counts are reviewer-level data.
 
 ### Security and privacy
 
@@ -177,7 +193,7 @@ Reviewer selection is a fixed rule: first-page reviewers reporting two or more r
 
 ### Interpretation
 
-The view states whether overlap could be assessed at all, and the headline follows the same rule in every mode. With fewer than two collected histories the headline is that coordination cannot be assessed; an absence of overlap is not reported as a finding. With two or more histories but not all, the headline leads with how few reviewers could be compared. Only when every reviewer has a collected history does it state plainly that no pair overlaps. With overlap it reports counts and calls it a pattern to look into. It never reports a score, a probability, or a conclusion about any reviewer or business.
+The view states whether overlap could be assessed at all, and the headline follows the same rule in every mode. With fewer than two retrieved histories the headline is that coordination cannot be assessed; an absence of overlap is not reported as a finding. With two or more and nothing overlapping, the headline is "No repeated overlap observed in the retrieved review windows", and the assessment says how many reviewers could not be compared and how many retrieved histories are partial or of unknown completeness. The page never states that no overlap exists. With overlap it reports counts and calls it a pattern to look into. It never reports a score, a probability, or a conclusion about any reviewer or business.
 
 ## Experiment scripts and private local inputs
 

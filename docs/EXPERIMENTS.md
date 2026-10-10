@@ -6,7 +6,7 @@ Experiment log, using the format from `PROJECT_SPEC.md` Section 24. Only observe
 
 **Raw data contract:** every uncached response is saved as a *sanitized raw response*: the complete SerpApi response before any application-level transformation, with the API key replaced by `[REDACTED]`. Schemas are validated against these files.
 
-**SerpApi requests made in total:** 8 (6 in the experiments below, 2 in the live dashboard validation).
+**SerpApi requests attempted in total:** 11 (6 in the experiments below, 2 in the first live dashboard validation, 3 in the live reviewer-history validation, one of which was rejected).
 
 ---
 
@@ -177,7 +177,42 @@ The dashboard was driven in a browser through its own confirmation prompts. An i
 
 ### Limitations
 
-Reviewer-history collection, failure handling, and overlap detection in a live investigation have run only against a simulated SerpApi.
+This run collected no reviewer histories.
+
+---
+
+## Live Reviewer-History Validation
+
+**Date:** 2026-10-10
+**SerpApi searches attempted:** 3 (2 successful, 1 rejected)
+**Scope:** the dashboard's Investigate workflow with two reviewer histories, for a business whose search and first review page were already saved.
+
+### Method
+
+The sanitized dashboard code was driven in a browser through its own confirmation prompts, with the saved search and review page reused. An independent HTTP-layer limit allowed two Contributor Reviews requests, only for the two reviewers the dashboard selected. The reviewer-selection rule in force was the earlier one (most reported reviews first); no `num` parameter was sent.
+
+### Results
+
+- **First attempt:** the test harness supplied a malformed key. One request was sent and rejected with HTTP 401. The dashboard stopped at once, made no second request, kept the review-page data, reported a partial result, and showed a fixed message. Nothing was saved.
+- **Second attempt:** the plan stated at most 2 requests; 2 were sent, both HTTP 200. Each response matched its requested contributor. Each history listed 10 entries, all with a valid business identifier, rating, review identifier, and date text; nothing was skipped.
+- **Graph:** 8 reviewers, 21 businesses (the investigated one and 20 from the histories), 28 links, 1 connected component.
+- **Truncation:** both reviewers' profiles report more than 500 reviews, yet 10 entries were returned each, and neither response contained a pagination object. The investigated business itself appears in neither history, although both reviewers are on its review page.
+- **Overlap:** the two histories share no business. No reviewer pair shares two or more businesses.
+- **Privacy:** nothing the browser received contained a reviewer identifier, name, profile link, review text, token, business identifier, saved-response filename, or the API key.
+
+### Unexpected findings
+
+- A history as returned by default is a 10-entry window, and the response gives no sign that it is incomplete.
+- A history can omit a link already known from a review page.
+- Selecting the reviewers who report the most reviews selects exactly those whose histories are most truncated.
+
+### Limitations
+
+One pair of reviewers, 10 entries each out of several hundred. This cannot rule out overlap between those two reviewers, let alone others. Whether `num` enlarges the window has not been tested.
+
+### Decision
+
+**PASS — live history collection works.** It is not evidence about coordination. It led to the changes recorded in `docs/ARCHITECTURE.md` under "Contributor history windows": histories are reported as windows, the entry limit is configurable, and reviewer selection prefers histories that fit the window.
 
 ---
 

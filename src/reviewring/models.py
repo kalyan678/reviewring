@@ -19,6 +19,12 @@ from dataclasses import dataclass, field
 MAPS_REVIEWS_ENGINE = "google_maps_reviews"
 CONTRIBUTOR_REVIEWS_ENGINE = "google_maps_contributor_reviews"
 
+# Contributor Reviews `num` parameter, as DOCUMENTED by SerpApi (not observed
+# limits): "10 (default) returns 10 results ... should not be larger than 200".
+# Observed: with no `num`, two histories returned exactly 10 entries each.
+CONTRIBUTOR_REVIEWS_DEFAULT_NUM = 10
+CONTRIBUTOR_REVIEWS_MAX_NUM = 200
+
 
 @dataclass(frozen=True)
 class Source:
@@ -89,6 +95,11 @@ class ContributorHistory:
     source_file: str
     entries_listed: int
     next_token: str | None = None
+    # `search_parameters.num` as echoed by SerpApi; None when the request sent none.
+    requested_limit: int | None = None
+    # `contributor.contributions.reviews`: the profile's own review total. It is
+    # self-reported, may be approximate, and its key name varies with language.
+    reported_total: int | None = None
 
 
 @dataclass

@@ -25,7 +25,10 @@ from reviewring import serpapi_client
 from reviewring.graph import build_graph
 from reviewring.investigation import (
     DEFAULT_HISTORIES,
+    DEFAULT_HISTORY_LIMIT,
     MAX_HISTORIES,
+    MAX_HISTORY_LIMIT,
+    MIN_HISTORY_LIMIT,
     Collection,
     IsCached,
     RequestCeilingReached,
@@ -73,6 +76,7 @@ class _Investigation:
     histories_requested: int
     collection: Collection = field(default_factory=Collection)
     state: str = "running"
+    history_limit: int = DEFAULT_HISTORY_LIMIT
     view: dict[str, Any] | None = None
     thread: threading.Thread | None = None
 
@@ -148,6 +152,9 @@ class LiveState:
             "key_configured": bool(self._key_configured()),
             "default_histories": DEFAULT_HISTORIES,
             "max_histories": MAX_HISTORIES,
+            "default_history_limit": DEFAULT_HISTORY_LIMIT,
+            "min_history_limit": MIN_HISTORY_LIMIT,
+            "max_history_limit": MAX_HISTORY_LIMIT,
         }
 
     # ---------- search ----------
@@ -207,13 +214,24 @@ class LiveState:
 
     # ---------- investigation ----------
 
-    def plan_investigation(self, reference: Any, histories: Any) -> dict[str, Any]:
+    def plan_investigation(self, reference: Any, histories: Any, history_limit: Any = None) -> dict[str, Any]:
         with self._lock:
             business = self._businesses.get(reference) if isinstance(reference, str) else None
         if business is None:
             raise LiveError(404, "That business is not in the current search results. Search again.")
         if isinstance(histories, bool) or not isinstance(histories, int) or not 0 <= histories <= MAX_HISTORIES:
             raise LiveError(400, f"Choose between 0 and {MAX_HISTORIES} reviewer histories.")
+        limit = DEFAULT_HISTORY_LIMIT if history_limit is None else history_limit
+        if isinstance(limit, bool) or not isinstance(limit, int) or not MIN_HISTORY_LIMIT <= limit <= MAX_HISTORY_LIMIT:
+            raise LiveError(
+                400, f"Choose between {MIN_HISTORY_LIMIT} and {MAX_HISTORY_LIMIT} entries per reviewer history."
+            )
+        window = (
+            f" Each history request asks for up to {limit} entries; the API may return fewer, "
+            "and a history saved with a different entry limit is not reused."
+            if histories
+            else ""
+        )
 
         page_params = review_page_params(business["data_id"])
         if self._is_cached(page_params):
@@ -221,11 +239,11 @@ class LiveState:
             # so saved ones can be told apart from new requests. No request is made.
             try:
                 page = parse_maps_reviews(self._search(page_params), "review-page")
-                chosen = choose_reviewers(page, histories)
+                chosen = choose_reviewers(page, histories, limit)
             except (SerpApiError, ParseError):
                 chosen = None
             if chosen is not None:
-                new = sum(1 for contributor_id in chosen if not self._is_cached(history_params(contributor_id)))
+                new = sum(1 for contributor_id in chosen if not self._is_cached(history_params(contributor_id, limit)))
                 saved = len(chosen) - new
                 if new == 0:
                     statement = "No SerpApi request: everything needed is already saved on this computer."
@@ -233,23 +251,28 @@ class LiveState:
                     statement = (
                         f"At most {new} SerpApi request{'s' if new != 1 else ''} ({new} credit{'s' if new != 1 else ''}). "
                         f"The review page and {saved} of {len(chosen)} reviewer histories are already saved on "
-                        "this computer and will not be requested again."
+                        "this computer and will not be requested again." + window
                     )
-                return self._investigation_plan(business, histories, new, statement)
+                return self._investigation_plan(business, histories, limit, new, statement)
         maximum = 1 + histories
         statement = (
             f"At most {maximum} SerpApi request{'s' if maximum != 1 else ''} ({maximum} credit{'s' if maximum != 1 else ''}): "
             f"1 for the first page of reviews and up to {histories} for reviewer histories. "
-            "Whether any history is already saved is unknown until the review page is read."
+            "Whether any history is already saved is unknown until the review page is read." + window
         )
-        return self._investigation_plan(business, histories, maximum, statement)
+        return self._investigation_plan(business, histories, limit, maximum, statement)
 
-    def _investigation_plan(self, business: dict[str, str], histories: int, max_requests: int, statement: str) -> dict[str, Any]:
-        plan_id = self._add_plan("investigation", max_requests, {"business": business, "histories": histories})
+    def _investigation_plan(
+        self, business: dict[str, str], histories: int, limit: int, max_requests: int, statement: str
+    ) -> dict[str, Any]:
+        plan_id = self._add_plan(
+            "investigation", max_requests, {"business": business, "histories": histories, "history_limit": limit}
+        )
         return {
             "plan": plan_id,
             "business": business["title"],
             "histories": histories,
+            "history_limit": limit,
             "max_requests": max_requests,
             "statement": statement,
         }
@@ -261,6 +284,7 @@ class LiveState:
         plan = self._take_plan(plan_id, "investigation")
         business, histories = plan.payload["business"], plan.payload["histories"]
         investigation = _Investigation(business["title"], plan.max_requests, histories)
+        investigation.history_limit = plan.payload["history_limit"]
         investigation_id = secrets.token_urlsafe(16)
         with self._lock:
             if self._running:
@@ -270,26 +294,35 @@ class LiveState:
             _trim(self._investigations)
 
         def run() -> None:
-            try:
-                def progress(collection: Collection) -> None:
-                    investigation.collection = collection
+            def progress(collection: Collection) -> None:
+                investigation.collection = collection
 
+            try:
+                # collect() never raises: any failure ends collection and keeps
+                # what was parsed, with a fixed message in `stopped`.
                 collection = collect(
                     business["data_id"], histories, plan.max_requests,
                     self._guarded_search, self._is_cached, progress,
+                    plan.payload["history_limit"],
                 )
                 investigation.collection = collection
-                if collection.parsed:
+                if not collection.parsed:
+                    investigation.state = "failed"
+                    return
+                try:
                     investigation.view = build_view(
                         build_graph(collection.parsed),
                         INVESTIGATION,
                         business_titles={business["data_id"]: business["title"]},
                     )
-                    investigation.state = "partial" if collection.stopped else "complete"
-                else:
-                    investigation.state = "failed"
+                except Exception:  # noqa: BLE001
+                    # Collection worked but the result cannot be shown. No view is
+                    # offered, and exception text is never surfaced.
+                    investigation.view = None
+                    investigation.state = "unviewable"
+                    return
+                investigation.state = "partial" if collection.stopped else "complete"
             except Exception:  # noqa: BLE001
-                # Never surface exception text: it could quote collected data.
                 investigation.collection.stopped = "Collection stopped because of an unexpected error."
                 investigation.state = "failed"
             finally:
@@ -313,8 +346,10 @@ class LiveState:
             "requests_sent": collection.requests_sent,
             "saved_responses_used": collection.cache_hits,
             "histories_requested": investigation.histories_requested,
+            "history_limit": investigation.history_limit,
             "histories_planned": collection.histories_planned,
             "histories_collected": collection.histories_collected,
+            "responses_collected": len(collection.parsed),
             "stopped": collection.stopped,
         }
         if investigation.state != "running" and investigation.view is not None:

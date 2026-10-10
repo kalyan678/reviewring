@@ -48,6 +48,13 @@ def _number(value: Any) -> int | float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _whole_number(value: Any) -> int | None:
+    """An integer given as a number or as digits (request parameters are echoed as text)."""
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return _integer(value)
+
+
 def _flag(value: Any) -> bool | None:
     return value if isinstance(value, bool) else None
 
@@ -154,11 +161,12 @@ def parse_contributor_reviews(response: Any, source_file: str) -> ParsedResponse
 
     parsed = ParsedResponse(source_file=source_file, engine=CONTRIBUTOR_REVIEWS_ENGINE)
     entries = _entries(response, parsed)
+    contributor = _object(response.get("contributor"))
     parsed.reviewer_attributes.append(
         ReviewerAttributes(
             reviewer_id=reviewer_id,
             source_file=source_file,
-            local_guide=_flag(_object(response.get("contributor")).get("local_guide")),
+            local_guide=_flag(contributor.get("local_guide")),
         )
     )
     parsed.history = ContributorHistory(
@@ -166,6 +174,8 @@ def parse_contributor_reviews(response: Any, source_file: str) -> ParsedResponse
         source_file=source_file,
         entries_listed=len(entries),
         next_token=_next_token(response),
+        requested_limit=_whole_number(params.get("num")),
+        reported_total=_integer(_object(contributor.get("contributions")).get("reviews")),
     )
 
     for position, entry in enumerate(entries, start=1):

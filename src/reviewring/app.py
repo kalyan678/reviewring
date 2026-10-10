@@ -180,7 +180,9 @@ def make_handler(raw_dir: Path, live: LiveState) -> type[BaseHTTPRequestHandler]
             actions = {
                 "/api/search/plan": lambda body: live.plan_search(body.get("query")),
                 "/api/search": lambda body: live.run_search(body.get("plan")),
-                "/api/investigations/plan": lambda body: live.plan_investigation(body.get("business"), body.get("histories")),
+                "/api/investigations/plan": lambda body: live.plan_investigation(
+                    body.get("business"), body.get("histories"), body.get("history_limit")
+                ),
                 "/api/investigations": lambda body: live.start_investigation(body.get("plan")),
             }
             action = actions.get(urlsplit(self.path).path)

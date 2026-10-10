@@ -226,6 +226,25 @@ class ContributorReviewsParserTests(unittest.TestCase):
         parsed = parse_contributor_reviews(history_response([entry]), "history.json")
         self.assertEqual([o.reviewer_id for o in parsed.observations], [REVIEWER_1])
 
+    def test_requested_limit_and_reported_total_are_read_when_present(self):
+        for echoed, expected in ((50, 50), ("50", 50), (None, None), ("many", None), (True, None), (12.5, None)):
+            with self.subTest(num=echoed):
+                response = history_response([history_entry(BUSINESS_A)])
+                if echoed is not None:
+                    response["search_parameters"]["num"] = echoed
+                self.assertEqual(parse_contributor_reviews(response, "h.json").history.requested_limit, expected)
+        contributor_cases = [
+            ({"contributions": {"reviews": 512, "photos": 9}}, 512),
+            ({"contributions": {"opiniones": 512}}, None),  # key names vary with language
+            ({"contributions": {"reviews": "512"}}, None),
+            ({"contributions": "none"}, None),
+            ({}, None),
+        ]
+        for contributor, expected in contributor_cases:
+            with self.subTest(contributor=contributor):
+                response = history_response([history_entry(BUSINESS_A)], contributor=contributor)
+                self.assertEqual(parse_contributor_reviews(response, "h.json").history.reported_total, expected)
+
     def test_history_length_is_what_was_listed_not_a_reported_count(self):
         parsed = parse_contributor_reviews(history_response([history_entry(BUSINESS_A)] * 3), "history.json")
         self.assertEqual(parsed.history.entries_listed, 3)

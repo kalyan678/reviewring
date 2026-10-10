@@ -194,6 +194,7 @@ function renderCoverage(view) {
       c.reviewers,
       "Without a history, only the business a reviewer was found on is known."
     ),
+    el("p", { class: "muted" }, c.history_windows.statement),
     el(
       "p",
       { class: "callout" },
@@ -213,7 +214,7 @@ function renderIndicators(view) {
     ),
   ];
   if (!ind.groups.length) {
-    parts.push(el("p", { class: "headline" }, "No group found."), el("p", { class: "muted" }, "No two reviewers in this data share enough businesses to be linked. With few review histories collected, this says little either way."));
+    parts.push(el("p", { class: "headline" }, "No group found."), el("p", { class: "muted" }, "No two reviewers share enough businesses in the retrieved data to be linked. With few or partial review histories retrieved, this says little either way."));
   } else {
     const list = el("div", { class: "groups" });
     for (const group of ind.groups) {
@@ -528,6 +529,10 @@ async function openInvestigate() {
     $("histories").max = String(session.max_histories);
     $("histories").value = String(session.default_histories);
     $("histories-label").textContent = `Reviewer histories to collect (0 to ${session.max_histories})`;
+    $("history-limit").min = String(session.min_history_limit);
+    $("history-limit").max = String(session.max_history_limit);
+    $("history-limit").value = String(session.default_history_limit);
+    $("history-limit-label").textContent = `Entries to request per history (${session.min_history_limit} to ${session.max_history_limit})`;
   }
   if (investigationView && modeFromHash() === "investigate") show(investigationView);
 }
@@ -570,6 +575,10 @@ function finishInvestigation(status) {
   }
   if (status.state === "partial") lines.push(`Stopped early: ${status.stopped} What was collected before that is shown below.`);
   if (status.state === "failed") lines.push(`Nothing could be collected: ${status.stopped}`);
+  if (status.state === "unviewable") {
+    lines.push(`${plural(status.responses_collected, "response")} collected and saved on this computer, but the result could not be displayed, so no summary is shown.${status.stopped ? ` Collection also stopped early: ${status.stopped}` : ""}`);
+  }
+  if (status.histories_collected) lines.push(`Up to ${status.history_limit} entries were requested per history; see Coverage for how complete the retrieved histories appear.`);
   replace($("live-summary"), ...lines.map((line) => el("p", {}, line)));
   $("live-summary").hidden = false;
   if (status.view) {
@@ -607,7 +616,8 @@ $("results-form").addEventListener("submit", (event) => {
   const histories = Number.parseInt($("histories").value, 10);
   if (!chosen) return liveError("Choose a business first.");
   guarded(async () => {
-    const plan = await post("/api/investigations/plan", { business: chosen.value, histories });
+    const history_limit = Number.parseInt($("history-limit").value, 10);
+    const plan = await post("/api/investigations/plan", { business: chosen.value, histories, history_limit });
     askConfirm(plan, async () => {
       $("live-summary").hidden = true;
       $("dashboard").hidden = true;

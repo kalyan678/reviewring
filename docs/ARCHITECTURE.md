@@ -241,6 +241,26 @@ The synthetic demo can be expanded step by step so the whole journey can be seen
 - `GET /api/view?mode=synthetic&expansions=N` serves a step. It is stateless and idempotent, so the same number always gives the same view. It needs no plan and no token because nothing is requested or spent: the synthetic modules do not import the SerpApi client.
 - The view marks the nodes the latest step added. Real views never carry the demo's expansion block.
 
+### Hosted demo mode
+
+`REVIEWRING_HOSTED_DEMO=1` starts a different handler, `app._HostedHandler`, bound to all interfaces on `PORT`. It is not the local handler with routes removed: it is a separate allowlist, so a route added to the local dashboard later is not exposed publicly unless someone adds it there on purpose.
+
+| Request | Hosted response |
+|---|---|
+| `GET` or `HEAD` `/`, `/static/app.css`, `/static/app.js` (no query string) | The file, from a fixed table; no path from the request reaches the filesystem |
+| `GET /favicon.ico` | 204 |
+| `GET /api/config` | `{"hosted_demo": true}` |
+| `GET /api/view?mode=synthetic[&expansions=N]` | The fictional view; any other mode, parameter, repeated parameter or malformed query is 400 |
+| Any other path | 404 |
+| `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | 405; the body is not read |
+
+- The module that holds live state (`reviewring.live`) and the SerpApi client are imported only when a local server is created. A test starts the hosted server in an interpreter where those modules and all third-party packages are blocked from importing.
+- No `LiveState`, session token, plan, or investigation exists in this mode, so there is no shared mutable state and nothing to spend.
+- The `Host` check of the local server (a defence against DNS rebinding on loopback) does not apply: a public server is reached under its own name and serves the same fictional data to everyone.
+- Each connection has a 15-second socket timeout. Errors are fixed messages.
+- The setting must be exactly `1`. Any other non-empty value stops the program, so a typo cannot start the local dashboard where the hosted demo was intended, or the reverse. Without it the default is unchanged: loopback, port 8765.
+- The page asks `/api/config` first. When hosted it hides the other two tabs and ignores the URL fragment. This is presentation only; the restrictions are enforced by the server.
+
 ### Security and privacy
 
 - Loopback only. Every request must carry this server's own `Host` header, which blocks DNS rebinding.

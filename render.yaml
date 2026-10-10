@@ -1,0 +1,17 @@
+# Render Blueprint for the public ReviewRing demo: fictional data only.
+#
+# The hosted demo uses only the Python standard library, so nothing is
+# installed at build time, and it needs no SerpApi key. Do not add one here.
+services:
+  - type: web
+    name: reviewring-demo
+    runtime: python
+    plan: free
+    buildCommand: python --version
+    startCommand: python main.py
+    healthCheckPath: /api/config
+    envVars:
+      - key: REVIEWRING_HOSTED_DEMO
+        value: "1"
+      - key: PYTHON_VERSION
+        value: 3.11.11

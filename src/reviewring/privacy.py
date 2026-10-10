@@ -20,7 +20,6 @@ import hmac
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 
 PSEUDONYM_KEY_ENV_VAR = "REVIEWRING_PSEUDONYM_KEY"
 MIN_KEY_LENGTH = 32
@@ -42,6 +41,14 @@ def _check_key(key: bytes) -> None:
             f"{PSEUDONYM_KEY_ENV_VAR} must be set to a secret of at least "
             f"{MIN_KEY_LENGTH} characters (see .env.example). It is never generated automatically."
         )
+
+
+def load_dotenv(path: Path) -> None:
+    """Read ``.env``. The package is imported here, not at module level, so code
+    that only builds graphs (the hosted demo included) does not depend on it."""
+    from dotenv import load_dotenv as read
+
+    read(path)
 
 
 def load_pseudonym_key() -> bytes:

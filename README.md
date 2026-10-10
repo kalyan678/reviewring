@@ -8,7 +8,9 @@ It identifies patterns that may warrant a closer look. It does not determine tha
 
 ## Demo
 
-There is no hosted online demo yet. ReviewRing runs on your own computer: follow the quick start below, then open the address it prints in your browser. That address only works on the computer where the server is running.
+ReviewRing is built to run on your own computer: follow the quick start below, then open the address it prints in your browser. That address only works on the computer where the server is running.
+
+The same code can also be hosted as a public, synthetic-only demo; see [Hosted demo](#hosted-demo-synthetic-only). A hosted demo shows fictional data only and cannot contact SerpApi.
 
 ## Quick start (no API key needed)
 
@@ -129,6 +131,46 @@ An investigation never requests any business other than the one you selected. Ex
 - **If a request fails,** nothing is retried. A page collected before the failure is kept and merged; if none was collected, the investigation is left exactly as it was. Either way the original result stays on screen.
 - **Reading the result.** "What expansion added" is listed apart from the original findings: reviews collected, reviewers before and after, and reviewer pairs sharing two or more businesses before and after. Higher counts after expansion mean more was collected, nothing else. Two reviewers appearing together on another business's page is an observed co-review. It is not evidence that anyone arranged it: people who live near each other or share an interest review the same places.
 
+## Hosted demo (synthetic only)
+
+The repository can serve a public demo so the walkthrough can be tried without installing anything. It is a restricted mode of the same server, switched on only by `REVIEWRING_HOSTED_DEMO=1`.
+
+**What it contains.** The interactive synthetic demo: the fictional network, the overlap evidence, both expansion steps, the before-and-after comparison, and reset. It is labelled as fictional throughout.
+
+**What it switches off.** Everything that touches real data. The hosted server has a fixed list of routes: the page, its stylesheet and script, a one-line configuration flag, and the synthetic view. Search, investigation, reviewer-history, real expansion, the collected sample and the session token do not exist there, and no request method other than GET and HEAD is accepted. It does not load the live-investigation code or the SerpApi client, reads no key and no saved data, keeps no state between requests, and sets no cookie. It does not perform live SerpApi collection; that runs only on your own computer with your own key.
+
+**Try the hosted mode locally.**
+
+```
+REVIEWRING_HOSTED_DEMO=1 PORT=10000 python main.py
+```
+
+On Windows PowerShell: `$env:REVIEWRING_HOSTED_DEMO = "1"; $env:PORT = "10000"; python main.py`. Then open `http://127.0.0.1:10000`. In this mode the server listens on all network interfaces, so other devices on your network can reach it. It needs no installed packages, only Python 3.11 or newer.
+
+Any other value of `REVIEWRING_HOSTED_DEMO` stops the program instead of starting either mode. Without the variable the server is the local dashboard on `127.0.0.1:8765`, as before.
+
+**Deploy on Render.** `render.yaml` describes the service. To set it up by hand, create a Web Service from this repository with:
+
+| Setting | Value |
+|---|---|
+| Runtime | Python 3 |
+| Build command | `python --version` (nothing needs installing) |
+| Start command | `python main.py` |
+| Environment variable | `REVIEWRING_HOSTED_DEMO` = `1` |
+| Environment variable | `PYTHON_VERSION` = `3.11.11` |
+| Health check path | `/api/config` |
+
+Render provides `PORT` itself. Do not add `SERPAPI_API_KEY`: the hosted demo never reads it.
+
+**Check a deployed URL.**
+
+- `https://<your-service>/api/config` returns `{"hosted_demo": true}`.
+- The page opens directly on the synthetic demo, with no Collected sample or Investigate tab.
+- `https://<your-service>/api/view?mode=real` returns an error, not data.
+- `https://<your-service>/api/session` returns "Not found".
+
+**Free-tier limits.** A free Render service is stopped after a period without visitors and takes up to about a minute to start again, so the first page load can be slow. It has limited monthly hours and no uptime guarantee. Nothing is stored, so a restart loses nothing.
+
 ## What has been verified against the real service
 
 All figures are from `docs/EXPERIMENTS.md`. Thirteen SerpApi requests were attempted in total; twelve succeeded.
@@ -154,6 +196,7 @@ Not verified against the real service: collecting more than two review pages in 
 - No coordination score, community detection, temporal analysis, or adjusted rating is implemented.
 - Investigations are kept in memory and disappear when the server stops. Their saved responses remain and then appear in the collected sample, alongside any unrelated ones.
 - Browser checks were run in one desktop browser engine.
+- The hosted demo mode was verified on a local machine only. Its behaviour on a hosting provider (build, start-up, sleeping) has not been observed.
 
 ## Privacy safeguards
 

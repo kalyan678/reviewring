@@ -10,6 +10,7 @@ const $ = (id) => document.getElementById(id);
 let current = null; // the view being shown
 let selection = null; // { ids: Set, title, lines, pinned }
 let demoSteps = 0; // expansion steps applied to the synthetic demo; reset whenever the demo is opened
+let hosted = false; // true when the server is the public demo, which serves fictional data only
 
 function el(tag, attrs = {}, text) {
   const node = document.createElement(tag);
@@ -36,6 +37,7 @@ function plural(count, noun, pluralNoun = `${noun}s`) {
 // ---------- mode handling ----------
 
 function modeFromHash() {
+  if (hosted) return "synthetic"; // the public demo has no other mode
   const mode = location.hash.slice(1);
   return MODES.includes(mode) ? mode : "real";
 }
@@ -74,18 +76,22 @@ async function load(mode) {
     show(view);
   } catch (error) {
     if (mode !== modeFromHash()) return;
-    showState("The view could not be loaded", "Check that the ReviewRing server is still running, then reload.");
+    showState(
+      "The view could not be loaded",
+      hosted ? "The demo server may still be starting. Wait a few seconds, then reload." : "Check that the ReviewRing server is still running, then reload."
+    );
   }
 }
 
 const NETWORK_USE = {
   offline: "This page runs entirely on your computer and makes no outside request.",
+  hosted: "This hosted page serves fictional data only. It contacts no other service, uses no SerpApi key, and stores nothing in your browser.",
   investigate:
     "This page runs on your computer and loads nothing from outside. In this mode the local ReviewRing server contacts SerpApi, and only after you confirm each step.",
 };
 
 function showBanner(mode) {
-  $("network-use").textContent = mode === "investigate" ? NETWORK_USE.investigate : NETWORK_USE.offline;
+  $("network-use").textContent = hosted ? NETWORK_USE.hosted : mode === "investigate" ? NETWORK_USE.investigate : NETWORK_USE.offline;
   const banner = $("banner");
   banner.className = mode === "synthetic" ? "banner synthetic" : "banner";
   if (mode === "investigate") {
@@ -102,7 +108,10 @@ function showBanner(mode) {
       el("strong", {}, "SYNTHETIC DEMO. "),
       document.createTextNode(
         "Every business, reviewer, and rating below is fictional and was invented to illustrate an overlap pattern. Nothing here describes a real business or person."
-      )
+      ),
+      hosted
+        ? el("span", { class: "hosted-note" }, " This public demo serves only this fictional walkthrough. Investigating real businesses through SerpApi is switched off here; it runs on your own computer with your own key.")
+        : null
     );
   } else {
     replace(
@@ -760,4 +769,19 @@ window.addEventListener("resize", () => {
   resizeTimer = setTimeout(() => { if (current && !$("dashboard").hidden) renderNetwork(current); }, 150);
 });
 
-load(modeFromHash());
+// Ask the server which kind it is before showing anything. If that fails the
+// page behaves as the local dashboard, and a hosted server refuses those requests.
+async function start() {
+  try {
+    hosted = (await request("/api/config")).hosted_demo === true;
+  } catch (error) {
+    hosted = false;
+  }
+  if (hosted) {
+    $("mode-real").hidden = true;
+    $("mode-investigate").hidden = true;
+  }
+  load(modeFromHash());
+}
+
+start();

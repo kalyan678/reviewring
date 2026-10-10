@@ -376,7 +376,11 @@ class LiveStateTests(unittest.TestCase):
         )
         # 6 reviewers; the seed, the shared business. Reviewers 2 and 6 share both.
         self.assertEqual((view["metrics"]["reviewers"], view["metrics"]["businesses"], view["metrics"]["pairs_sharing_two"]), (6, 2, 1))
-        self.assertEqual(view["indicators"]["groups"][0]["reviewers"], 2)
+        # Two real reviewers overlap: reported as evidence, never as a described group.
+        indicators = view["indicators"]
+        self.assertEqual((indicators["group_count"], indicators["groups"], indicators["groups_withheld"]), (1, [], 1))
+        self.assertEqual((indicators["evidence"]["pairs"], indicators["evidence"]["reviewers_involved"]), (1, None))
+        self.assertTrue(indicators["evidence"]["detail_withheld"])
         self.assertTrue(view["explanation"]["assessment"]["assessable"])
         self.assertIn("not a finding of coordination", view["explanation"]["assessment"]["statement"])
         text = json.dumps(status)

@@ -191,6 +191,27 @@ A retrieved history is a window onto a reviewer's reviews, and the code never tr
 - SerpApi error text is never forwarded, because it can repeat request parameters such as a contributor ID. The browser receives one of a fixed set of messages.
 - Raw responses are written only by the client, sanitized, to the git-ignored `data/raw/` and `data/cache/`.
 
+### Overlap evidence for small groups
+
+When a few real reviewers share businesses, the page explains what was found without describing them. The summary is built in `views._overlap_evidence`.
+
+- **Shown for real data:** the number of reviewer pairs sharing two or more businesses; how many businesses are shared and the most any one pair shares, each as a band ("2", "3 to 4", "5 to 9", "10 or more"); and how many categories those businesses fall in, also as a band, with no category names.
+- **Withheld when any group has fewer than five reviewers:** how many reviewers are involved, how they group, who they are, any per-reviewer link, and any list of the businesses they share. A group this small gets no group card at all, and the network draws no node or link for it. The threshold is applied to each group, not to the total, so two small groups are never summed into a count that would reveal their sizes.
+- **Shown for five or more reviewers:** each group's size, pair count, and shared-business count. Still no member list.
+- **Always shown beside it:** that shared businesses alone do not show an arrangement, how many reviewers had a history retrieved, how many of those histories are partial or of unknown completeness, and, when nothing overlaps, that this is not a finding that no overlap exists.
+- **Synthetic demo:** unchanged. Every group is listed with its fictional members and businesses and can be highlighted in the network.
+
+The summary depends only on the shape of the overlap. Two investigations with the same shape but different reviewers and different businesses produce identical output, which is tested directly.
+
+This limits what the dashboard discloses and reduces how identifiable a small group is from the page alone. It does not guarantee anonymity, and the page says so. Known limits:
+
+- **The pair count reveals small group sizes.** One pair means two reviewers; three pairs among a withheld set means three or four. Group size is treated as acceptable to show; membership is not.
+- **Combined with public pages, membership can be worked out.** Reviewer selection is a documented rule over a public review page, and the investigated business is named. Someone who repeats the collection, or compares public profiles, can find out which reviewers overlap. The page does not make that easier, but it cannot prevent it.
+- **Varying the settings is a form of drill-down.** Running the same investigation with one more history and seeing the pair count change points at the added reviewer. This is available only to the operator, who already holds the raw responses locally; it matters for what is published, such as screenshots of several runs side by side.
+- **Bands are coarse, not private.** A band plus a named business narrows possibilities for anyone holding the same public data.
+- **Aggregates combine.** The pair count, the number of reviewers not drawn in the network, the number of histories retrieved, and the entries retrieved are each harmless alone. Together they can pin down the shape of a small set: for example, three histories retrieved and one overlapping pair means two of those three reviewers.
+- **A described large group can expose a small one by subtraction.** When a group of five or more is shown with its pair count beside the total pair count, the difference is the small groups' pair count.
+
 ### Interpretation
 
 The view states whether overlap could be assessed at all, and the headline follows the same rule in every mode. With fewer than two retrieved histories the headline is that coordination cannot be assessed; an absence of overlap is not reported as a finding. With two or more and nothing overlapping, the headline is "No repeated overlap observed in the retrieved review windows", and the assessment says how many reviewers could not be compared and how many retrieved histories are partial or of unknown completeness. The page never states that no overlap exists. With overlap it reports counts and calls it a pattern to look into. It never reports a score, a probability, or a conclusion about any reviewer or business.

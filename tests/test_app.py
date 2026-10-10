@@ -181,6 +181,13 @@ class StaticPageTests(unittest.TestCase):
     def test_collected_sample_banner_says_it_combines_unrelated_saved_data(self):
         self.assertIn("from all searches and investigations, which may be unrelated", self.sources["app.js"])
 
+    def test_overlap_panel_renders_evidence_and_limits_from_the_server(self):
+        script = self.sources["app.js"]
+        for expected in ("What was observed", "What this does not show", "ind.evidence.observed_statements", "ind.evidence.limit_statements"):
+            self.assertIn(expected, script)
+        # Member lists and the highlight button exist only for groups the server chose to describe.
+        self.assertIn("if (group.members)", script)
+
     def test_synthetic_mode_is_conspicuously_labelled(self):
         self.assertIn("SYNTHETIC DEMO", self.sources["app.js"])
         self.assertIn("fictional", self.sources["app.js"])

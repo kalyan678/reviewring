@@ -213,9 +213,19 @@ function renderIndicators(view) {
       `Rule: two reviewers are linked when both reviewed at least ${ind.minimum_shared_businesses} of the same businesses. Linked reviewers form a group. The number ${ind.minimum_shared_businesses} is a starting point for exploration, not a validated threshold.`
     ),
   ];
-  if (!ind.groups.length) {
-    parts.push(el("p", { class: "headline" }, "No group found."), el("p", { class: "muted" }, "No two reviewers share enough businesses in the retrieved data to be linked. With few or partial review histories retrieved, this says little either way."));
-  } else {
+  const list = (items) => {
+    const ul = el("ul", { class: "points" });
+    for (const item of items) ul.append(el("li", {}, item));
+    return ul;
+  };
+  if (!ind.group_count) parts.push(el("p", { class: "headline" }, "No group found."));
+  parts.push(
+    el("h3", {}, "What was observed"),
+    list(ind.evidence.observed_statements),
+    el("h3", {}, "What this does not show"),
+    list(ind.evidence.limit_statements)
+  );
+  if (ind.groups.length) {
     const list = el("div", { class: "groups" });
     for (const group of ind.groups) {
       const card = el("div", { class: "group" });

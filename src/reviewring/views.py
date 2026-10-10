@@ -29,7 +29,7 @@ from reviewring.graph import (
     compute_metrics,
     history_coverage,
 )
-from reviewring.indicators import MIN_SHARED_BUSINESSES, OverlapGroup, overlap_groups
+from reviewring.indicators import MIN_SHARED_BUSINESSES, OverlapGroup, overlap_groups, shared_business_pairs
 from reviewring.loader import RAW_DIR, SavedDataError, load_saved_graph
 from reviewring.synthetic import build_synthetic_graph, display_names
 
@@ -89,7 +89,7 @@ def _distribution(ratings: list[int | float]) -> list[dict[str, Any]]:
 
 
 def _share_band(fraction: float) -> str:
-    """A coarse share, so that a few reviewers' reported totals cannot be worked back."""
+    """A coarse share, so that a few reviewers' reported totals are harder to work back."""
     if fraction < 0.05:
         return "under 5%"
     if fraction < 0.25:
@@ -239,13 +239,121 @@ def _ratings_section(graph: Graph, coverage: list[BusinessCoverage], labels: dic
     }
 
 
-def _indicator_section(graph: Graph, groups: list[OverlapGroup], names: dict[str, str] | None) -> dict[str, Any]:
+def _size_band(count: int) -> str:
+    """A coarse size, so small exact combinations cannot be matched against public pages."""
+    if count <= 2:
+        return str(count)
+    if count <= 4:
+        return "3 to 4"
+    if count <= 9:
+        return "5 to 9"
+    return "10 or more"
+
+
+def _category_spread(count: int) -> str:
+    if count == 0:
+        return "categories that were not reported"
+    if count == 1:
+        return "a single category"
+    return "2 to 3 categories" if count <= 3 else "4 or more categories"
+
+
+def _overlap_evidence(
+    graph: Graph, groups: list[OverlapGroup], categories: dict[str, set[str]], coverage: dict[str, Any], detailed: bool
+) -> dict[str, Any]:
+    """What the overlap indicator found, as statements that name no one.
+
+    Real data (``detailed`` false) never gets a member list, a per-reviewer
+    link, a named or listed set of shared businesses, or category names. When
+    any group has fewer than ``MIN_AGGREGATE_GROUP_SIZE`` reviewers, the number
+    of reviewers and how they group are withheld, and business counts are given
+    as bands. The result depends only on the shape of the overlap, not on which
+    reviewers or businesses are involved.
+
+    This limits disclosure; it does not make a small group anonymous. The pair
+    count still indicates how small a set is, and anyone with the same public
+    review pages could work out its members (docs/ARCHITECTURE.md).
+    """
+    pairs = shared_business_pairs(graph)
+    involved_reviewers = {reviewer_id for pair in pairs for reviewer_id in pair.reviewers}
+    involved_businesses = {business_id for pair in pairs for business_id in pair.businesses}
+    category_count = len(set().union(*(categories.get(b, set()) for b in involved_businesses))) if pairs else 0
+    strongest = max((len(pair.businesses) for pair in pairs), default=0)
+    # Per group, not in total: two small groups must not be summed into a
+    # count that reveals their sizes.
+    withhold = not detailed and any(len(group.reviewers) < MIN_AGGREGATE_GROUP_SIZE for group in groups)
+    windows = coverage["history_windows"]
+    limited = windows["partial"] + windows["unknown"]
+    minimum = MIN_SHARED_BUSINESSES
+
+    compared = (
+        f"Only retrieved data was compared: review histories for {coverage['reviewers_with_history']} of "
+        f"{coverage['reviewers']} reviewers"
+        + (f", {limited} of them partial or of unknown completeness" if limited else "")
+        + "."
+    )
+    if not pairs:
+        observed = [f"No reviewer pair shares {minimum} or more businesses within the retrieved data."]
+        limits = [compared + " This is not a finding that no overlap exists."]
+    else:
+        observed = [
+            f"{_plural(len(pairs), 'reviewer pair')} {'shares' if len(pairs) == 1 else 'share'} {minimum} or more "
+            "businesses within the retrieved data."
+        ]
+        if withhold:
+            observed.append(
+                "At least one group has fewer than 5 reviewers, so how many reviewers are involved, who they "
+                "are, and how they group are not shown."
+            )
+        else:
+            observed.append(
+                f"{len(involved_reviewers)} reviewers are involved, in {_plural(len(groups), 'group')}."
+            )
+        shared_total = len(involved_businesses) if detailed else _size_band(len(involved_businesses))
+        most = strongest if detailed else _size_band(strongest)
+        observed.append(
+            f"Across those pairs, {shared_total} businesses are shared; the most any one pair shares is {most}."
+        )
+        observed.append(f"The shared businesses fall in {_category_spread(category_count)}.")
+        limits = [
+            "Shared businesses alone do not show that reviews were arranged. Neighbours, colleagues, and people "
+            "following the same recommendations share businesses too.",
+            compared + " More overlap, or an ordinary explanation for this one, may lie outside it.",
+        ]
+        if withhold:
+            limits.append(
+                "Detail is withheld for sets of fewer than 5 reviewers: no member list, no per-reviewer links, "
+                "and no list of which businesses they share. This limits what is disclosed; it does not make "
+                "them anonymous. The number of pairs indicates how small a set is, and someone with the same "
+                "public review pages could work out who is in it."
+            )
+    return {
+        "observed": bool(pairs),
+        "pairs": len(pairs),
+        "reviewers_involved": None if withhold else len(involved_reviewers),
+        "businesses_shared": (len(involved_businesses) if detailed else _size_band(len(involved_businesses))) if pairs else 0,
+        "strongest_pair": (strongest if detailed else _size_band(strongest)) if pairs else 0,
+        "category_spread": _category_spread(category_count) if pairs else None,
+        "detail_withheld": withhold,
+        "observed_statements": observed,
+        "limit_statements": limits,
+    }
+
+
+def _indicator_section(
+    graph: Graph, groups: list[OverlapGroup], names: dict[str, str] | None, coverage: dict[str, Any]
+) -> dict[str, Any]:
     categories = {
         business_id: {record.category for record in records if record.category is not None}
         for business_id, records in graph.business_attributes.items()
     }
     rows = []
+    withheld = 0
     for index, group in enumerate(groups, start=1):
+        if names is None and len(group.reviewers) < MIN_AGGREGATE_GROUP_SIZE:
+            # Real data: nothing is published about a set this small, not even its size.
+            withheld += 1
+            continue
         row: dict[str, Any] = {
             "label": f"Group {index}",
             "reviewers": len(group.reviewers),
@@ -262,7 +370,10 @@ def _indicator_section(graph: Graph, groups: list[OverlapGroup], names: dict[str
     return {
         "minimum_shared_businesses": MIN_SHARED_BUSINESSES,
         "pairs": sum(group.pairs for group in groups),
+        "group_count": len(groups),
         "groups": rows,
+        "groups_withheld": withheld,
+        "evidence": _overlap_evidence(graph, groups, categories, coverage, detailed=names is not None),
     }
 
 
@@ -420,10 +531,10 @@ def _explanation(mode: str, metrics: Any, coverage: dict[str, Any], indicators: 
     minimum = indicators["minimum_shared_businesses"]
     history_gap = coverage["reviewers"] - coverage["reviewers_with_history"]
     compared = coverage["reviewers_with_history"]
-    if indicators["groups"]:
+    if indicators["group_count"]:
         headline = (
-            f"{_plural(len(indicators['groups']), 'reviewer group')} "
-            f"{'shares' if len(indicators['groups']) == 1 else 'share'} {minimum} or more businesses "
+            f"{_plural(indicators['group_count'], 'reviewer group')} "
+            f"{'shares' if indicators['group_count'] == 1 else 'share'} {minimum} or more businesses "
             f"({_plural(indicators['pairs'], 'reviewer pair')})."
         )
     elif compared < 2:
@@ -455,7 +566,7 @@ def _explanation(mode: str, metrics: Any, coverage: dict[str, Any], indicators: 
             )
             + ". A business shared outside a retrieved window would not be seen."
         )
-    if indicators["groups"]:
+    if indicators["group_count"]:
         caution = (
             "Sharing several unrelated businesses is a structural pattern worth a closer look. "
             "It is not proof of fraud or of any arrangement between reviewers: neighbours, "
@@ -489,7 +600,7 @@ def _explanation(mode: str, metrics: Any, coverage: dict[str, Any], indicators: 
                 f"{'was' if compared == 1 else 'were'}."
             ),
         }
-    elif indicators["groups"]:
+    elif indicators["group_count"]:
         assessment = {
             "assessable": True,
             "statement": (
@@ -535,7 +646,7 @@ def build_view(
     labels = _business_labels(coverage_rows, names, business_titles or {})
     groups = overlap_groups(graph)
     coverage = _coverage_section(graph, coverage_rows, labels)
-    indicators = _indicator_section(graph, groups, names)
+    indicators = _indicator_section(graph, groups, names, coverage)
     network = (
         _aggregated_network(graph, coverage_rows, groups, labels)
         if names is None

@@ -68,7 +68,7 @@ Each view contains:
 - **Key figures** and a plain-language statement of what the data does and does not show, including when coordination cannot be assessed at all.
 - **Network.** Reviewers on one side, businesses on the other. Point at, tap, or tab to a node to see its connections and what was not collected. The same connections are available as a table.
 - **Coverage.** How many of each business's reported reviews were collected and how many reviewers have a collected history. Missing links are shown as unknown, not absent.
-- **Overlap indicator.** Two reviewers are linked when both reviewed at least two of the same businesses; linked reviewers form a group. The "two" is an exploratory starting point from the project spec, not a validated threshold. There is no score and no probability.
+- **Overlap indicator.** Two reviewers are linked when both reviewed at least two of the same businesses; linked reviewers form a group. The "two" is an exploratory starting point from the project spec, not a validated threshold. There is no score and no probability. The panel states what was observed (how many pairs overlap, roughly how many businesses and categories are involved) and what that does not show. For real data, when a group has fewer than five reviewers, it gives no group card, member list, links, or list of shared businesses. This limits what is disclosed; it does not make a small group anonymous, since the number of overlapping pairs indicates how small it is and its members could be worked out from the same public review pages.
 - **Ratings.** Ratings of the collected reviews, shown beside the rating Google reports and never averaged or mixed with it. No adjusted rating is computed, and the page says why.
 
 ### The synthetic demo

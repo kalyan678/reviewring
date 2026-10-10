@@ -223,6 +223,28 @@ class SyntheticExpansionTests(unittest.TestCase):
         self.assertEqual([g["reviewers"] for g in second["indicators"]["groups"]], [7, 2])
         self.assertEqual(second["expansion"]["new_nodes"], sorted([synthetic.reviewer_id(18), self.S(5)]))
 
+    def test_assessment_names_the_population_the_pairs_come_from(self):
+        tail = " That is a pattern to look into, not a finding of coordination."
+        lead = " share 2 or more businesses within the collected review pages and retrieved history windows. "
+        self.assertEqual(
+            synthetic_view()["explanation"]["assessment"]["statement"],
+            "Across the 13 reviewers in the collected data, 11 pairs" + lead
+            + "Every such pair is between two reviewers with a retrieved history. Review histories were retrieved "
+            "for 8 of the 13 reviewers; for the others, only the collected review pages are known." + tail,
+        )
+        # After expansion, nine of the pairs involve a reviewer who has no retrieved history.
+        self.assertEqual(
+            synthetic_view(1)["explanation"]["assessment"]["statement"],
+            "Across the 17 reviewers in the collected data, 20 pairs" + lead
+            + "11 of them are between two reviewers with a retrieved history; the other 9 involve a reviewer seen "
+            "only on collected review pages. Review histories were retrieved for 8 of the 17 reviewers; for the "
+            "others, only the collected review pages are known." + tail,
+        )
+        for steps in range(3):
+            statement = synthetic_view(steps)["explanation"]["assessment"]["statement"]
+            self.assertNotIn("Among the 8 reviewers with a retrieved history", statement)
+            self.assertNotIn("fraud", statement)
+
     def test_expanded_pages_are_distinguished_from_history_only_businesses(self):
         self.assertEqual([synthetic_view(n)["coverage"]["history_only_businesses"] for n in range(3)], [4, 2, 1])
         rows = {row["label"]: row for row in synthetic_view(2)["coverage"]["business_rows"]}
@@ -664,7 +686,7 @@ class HistoryWindowTests(unittest.TestCase):
             graph.edges[pair] = edge
         explanation = build_view(graph, INVESTIGATION)["explanation"]
         self.assertIn("1 reviewer group shares 2 or more businesses", explanation["headline"])
-        self.assertIn("within the retrieved windows", explanation["assessment"]["statement"])
+        self.assertIn("within the collected review pages and retrieved history windows", explanation["assessment"]["statement"])
         self.assertIn("not a finding of coordination", explanation["assessment"]["statement"])
 
 
@@ -879,6 +901,17 @@ class ModeIsolationTests(SavedDataTestCase):
         self.assertEqual((row["label"], row["withheld"], row["reported_total"]), ("Expanded business 1", True, None))
         rated = next(b for b in view["ratings"]["businesses"] if b["expanded"])
         self.assertEqual((rated["withheld"], rated["reported_rating"]), (True, None))
+
+    def test_real_assessment_does_not_credit_page_only_pairs_to_histories(self):
+        # Two review pages, no histories: the pair exists, and nothing about it comes from a history.
+        pages_only = build_view(graph_of(("r1", "b1"), ("r2", "b1"), ("r1", "b2"), ("r2", "b2")), REAL)
+        statement = pages_only["explanation"]["assessment"]["statement"]
+        self.assertEqual(pages_only["coverage"]["reviewers_with_history"], 0)
+        self.assertTrue(statement.startswith("Across the 2 reviewers in the collected data, 1 pair shares 2 or more businesses"))
+        self.assertIn("No such pair is between two reviewers with a retrieved history", statement)
+        self.assertIn("Review histories were retrieved for 0 of the 2 reviewers", statement)
+        self.assertNotIn("with a retrieved history, 1 pair", statement)
+        self.assertNotIn("cannot be assessed", statement)
 
     def test_real_view_contains_nothing_from_the_synthetic_fixture(self):
         text = json.dumps(real_view(self.raw_dir))

@@ -567,7 +567,48 @@ def _aggregated_network(graph: Graph, coverage: list[BusinessCoverage], groups: 
     }
 
 
-def _explanation(mode: str, metrics: Any, coverage: dict[str, Any], indicators: dict[str, Any]) -> dict[str, Any]:
+def _pair_population(mode: str, pairs: int, history_pairs: int, coverage: dict[str, Any]) -> str:
+    """Who the overlapping pairs are among, and how much is known about them.
+
+    Pairs are counted across every collected reviewer. A pair can rest on
+    review pages alone, so it need not be between reviewers whose histories
+    were retrieved. For real data a mixed split is described, not counted.
+    """
+    reviewers, with_history = coverage["reviewers"], coverage["reviewers_with_history"]
+    if history_pairs == pairs:
+        between = (
+            "That pair is between two reviewers with a retrieved history."
+            if pairs == 1
+            else "Every such pair is between two reviewers with a retrieved history."
+        )
+    elif history_pairs == 0:
+        between = (
+            "No such pair is between two reviewers with a retrieved history: each rests on collected "
+            "review pages for at least one of its reviewers."
+        )
+    elif mode == SYNTHETIC:
+        between = (
+            f"{history_pairs} of them {'is' if history_pairs == 1 else 'are'} between two reviewers with a "
+            f"retrieved history; the other {pairs - history_pairs} "
+            f"{'involves' if pairs - history_pairs == 1 else 'involve'} a reviewer seen only on collected review pages."
+        )
+    else:
+        between = (
+            "Some are between two reviewers with a retrieved history; others involve a reviewer seen only "
+            "on collected review pages."
+        )
+    known = (
+        f"Review histories were retrieved for all {reviewers} reviewers."
+        if with_history == reviewers
+        else f"Review histories were retrieved for {with_history} of the {reviewers} reviewers; for the "
+        "others, only the collected review pages are known."
+    )
+    return f"{between} {known}"
+
+
+def _explanation(
+    mode: str, metrics: Any, coverage: dict[str, Any], indicators: dict[str, Any], history_pairs: int = 0
+) -> dict[str, Any]:
     minimum = indicators["minimum_shared_businesses"]
     history_gap = coverage["reviewers"] - coverage["reviewers_with_history"]
     compared = coverage["reviewers_with_history"]
@@ -630,24 +671,27 @@ def _explanation(mode: str, metrics: Any, coverage: dict[str, Any], indicators: 
             "reviewer in common. They come from separate collections and are not one investigation."
         )
 
-    # Overlap is only observable between reviewers whose histories were collected.
-    if compared < 2:
+    if indicators["group_count"]:
+        # Pairs are counted across all collected reviewers, not only those with a history.
+        assessment = {
+            "assessable": True,
+            "statement": (
+                f"Across the {coverage['reviewers']} reviewers in the collected data, "
+                f"{_plural(indicators['pairs'], 'pair')} "
+                f"{'shares' if indicators['pairs'] == 1 else 'share'} {minimum} or more businesses within the "
+                "collected review pages and retrieved history windows. "
+                f"{_pair_population(mode, indicators['pairs'], history_pairs, coverage)} "
+                "That is a pattern to look into, not a finding of coordination."
+            ),
+        }
+    # Without overlap, an absence is only meaningful between reviewers whose histories were collected.
+    elif compared < 2:
         assessment = {
             "assessable": False,
             "statement": (
                 "Coordination cannot be assessed from this data. Overlap can only be seen between "
                 f"reviewers whose review histories were collected, and {compared} "
                 f"{'was' if compared == 1 else 'were'}."
-            ),
-        }
-    elif indicators["group_count"]:
-        assessment = {
-            "assessable": True,
-            "statement": (
-                f"Among the {compared} reviewers with a retrieved history, "
-                f"{_plural(indicators['pairs'], 'pair')} "
-                f"{'shares' if indicators['pairs'] == 1 else 'share'} {minimum} or more businesses "
-                "within the retrieved windows. That is a pattern to look into, not a finding of coordination."
             ),
         }
     else:
@@ -719,7 +763,12 @@ def build_view(
             "reviewer_degrees": [{"businesses": d, "reviewers": n} for d, n in metrics.reviewer_degrees.items()],
             "business_degrees": [{"reviewers": d, "businesses": n} for d, n in metrics.business_degrees.items()],
         },
-        "explanation": _explanation(mode, metrics, coverage, indicators),
+        "explanation": _explanation(
+            mode, metrics, coverage, indicators,
+            history_pairs=sum(
+                1 for pair in shared_business_pairs(graph) if all(r in graph.histories for r in pair.reviewers)
+            ),
+        ),
         "coverage": coverage,
         "indicators": indicators,
         "ratings": _ratings_section(graph, coverage_rows, labels, groups, expanded_businesses, withheld),

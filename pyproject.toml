@@ -1,7 +1,7 @@
 [project]
 name = "reviewring"
 version = "0.1.0"
-description = "Add your description here"
+description = "Reviewer-business graph analysis over SerpApi Google Maps data: shows structural overlap between reviewers and how much of the picture was collected."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

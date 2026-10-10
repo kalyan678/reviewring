@@ -1128,6 +1128,16 @@ class ExpansionWorkflowTests(unittest.TestCase):
             self.assertIn(needed, limits)
 
         view = status["view"]
+        # Before: the one pair is between the two reviewers whose histories were retrieved.
+        before_statement = before_view["explanation"]["assessment"]["statement"]
+        self.assertTrue(before_statement.startswith("Across the 6 reviewers in the collected data, 1 pair shares 2 or more businesses"))
+        self.assertIn("That pair is between two reviewers with a retrieved history. Review histories were retrieved for 2 of the 6 reviewers", before_statement)
+        # After: two further pairs involve a reviewer seen only on review pages. The split is described, not counted.
+        after_statement = view["explanation"]["assessment"]["statement"]
+        self.assertTrue(after_statement.startswith("Across the 14 reviewers in the collected data, 3 pairs share 2 or more businesses"))
+        self.assertIn("Some are between two reviewers with a retrieved history; others involve a reviewer seen only on collected review pages. Review histories were retrieved for 2 of the 14 reviewers", after_statement)
+        for wrong in ("Among the 2 reviewers with a retrieved history", "1 of them", "2 of them"):
+            self.assertNotIn(wrong, after_statement)
         self.assertEqual((before_view["metrics"]["reviewers"], before_view["metrics"]["pairs_sharing_two"]), (6, 1))
         self.assertEqual((view["metrics"]["reviewers"], view["metrics"]["pairs_sharing_two"]), (14, 3))
         # Reviewer-business links are not duplicated: 13 before, plus 9 links not seen before on the two pages.

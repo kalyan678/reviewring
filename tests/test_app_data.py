@@ -11,6 +11,7 @@ Run from the project root:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -483,7 +484,7 @@ class RealViewPrivacyTests(SavedDataTestCase):
         )
         view = build_view(graph, REAL)
         indicators = view["indicators"]
-        self.assertEqual((indicators["group_count"], indicators["groups"], indicators["groups_withheld"]), (1, [], 1))
+        self.assertEqual((indicators["group_count"], indicators["groups"], indicators["groups_withheld"]), (None, [], True))
         self.assertEqual(indicators["pairs"], 1)
         text = json.dumps(view)
         for private in (MARKER_BUSINESS_A, MARKER_BUSINESS_B, "10000000000000000", "members", "node_ids"):
@@ -539,7 +540,7 @@ class HeadlineTests(unittest.TestCase):
     def test_overlap_is_reported_as_a_pattern_whatever_the_coverage(self):
         pairs = [(marker_reviewer(n), b) for n in (1, 2) for b in (MARKER_BUSINESS_A, MARKER_BUSINESS_B)]
         explanation = self.view(pairs, [])["explanation"]
-        self.assertEqual(explanation["headline"], "1 reviewer group shares 2 or more businesses (1 reviewer pair).")
+        self.assertEqual(explanation["headline"], "1 reviewer pair shares 2 or more businesses.")
 
     def test_unrelated_saved_collections_are_called_out_in_the_combined_view_only(self):
         pairs = [(marker_reviewer(1), MARKER_BUSINESS_A), (marker_reviewer(2), MARKER_BUSINESS_B)]
@@ -712,7 +713,7 @@ class HistoryWindowTests(unittest.TestCase):
         for pair, edge in build_graph([extra]).edges.items():
             graph.edges[pair] = edge
         explanation = build_view(graph, INVESTIGATION)["explanation"]
-        self.assertIn("1 reviewer group shares 2 or more businesses", explanation["headline"])
+        self.assertIn("1 reviewer pair shares 2 or more businesses", explanation["headline"])
         self.assertIn("within the collected review pages and retrieved history windows", explanation["assessment"]["statement"])
         self.assertIn("not a finding of coordination", explanation["assessment"]["statement"])
 
@@ -767,8 +768,8 @@ class OverlapEvidenceTests(unittest.TestCase):
     def test_two_reviewer_overlap_is_communicated_without_revealing_its_members(self):
         view = self.investigation(members={2, 5}, shared=[MARKER_BUSINESS_B], others={3})
         indicators, evidence = view["indicators"], view["indicators"]["evidence"]
-        self.assertEqual((view["metrics"]["pairs_sharing_two"], indicators["group_count"]), (1, 1))
-        self.assertEqual((indicators["groups"], indicators["groups_withheld"]), ([], 1))
+        self.assertEqual((view["metrics"]["pairs_sharing_two"], indicators["group_count"]), (1, None))
+        self.assertEqual((indicators["groups"], indicators["groups_withheld"]), ([], True))
         self.assertEqual((evidence["observed"], evidence["pairs"], evidence["reviewers_involved"], evidence["detail_withheld"]), (True, 1, None, True))
         self.assertEqual(evidence["observed_statements"][0], "1 reviewer pair shares 2 or more businesses within the retrieved data.")
         self.assertTrue(any(s.startswith("At least one group has fewer than 5 reviewers") for s in evidence["observed_statements"]))
@@ -776,7 +777,7 @@ class OverlapEvidenceTests(unittest.TestCase):
         self.assertTrue(any("does not make them anonymous" in s and "could work out who is in it" in s for s in evidence["limit_statements"]))
         self.assertIn("2 businesses are shared; the most any one pair shares is 2", evidence["observed_statements"][2])
         self.assertTrue(any("no member list, no per-reviewer links" in s for s in evidence["limit_statements"]))
-        self.assertIn("1 reviewer group shares 2 or more businesses", view["explanation"]["headline"])
+        self.assertEqual(view["explanation"]["headline"], "1 reviewer pair shares 2 or more businesses.")
         self.assert_publishes_no_identifier_or_label(view)
         # The network draws no node or link for the overlapping reviewers.
         self.assertEqual([n["label"] for n in view["network"]["nodes"] if n["kind"] == "reviewer"], ["5 reviewers"])
@@ -807,6 +808,65 @@ class OverlapEvidenceTests(unittest.TestCase):
                 self.assertEqual(drawn + first["network"]["suppressed"]["reviewers"], 8)
                 self.assertGreaterEqual(first["network"]["suppressed"]["reviewers"], size)
 
+    GROUPING = re.compile(r"\b\d+ (?:reviewer )?groups?\b|\bin \d+ groups?\b|\bgroups? of \d+\b", re.IGNORECASE)
+
+    def test_how_reviewers_group_is_withheld_below_the_threshold_everywhere_it_could_appear(self):
+        """Headline, summary, evidence, network and every field the page receives."""
+        for size in (2, 3, 4):
+            with self.subTest(size=size):
+                view = self.investigation(members=set(range(1, size + 1)), shared=[MARKER_BUSINESS_B], reviewers=range(1, 12))
+                indicators, evidence = view["indicators"], view["indicators"]["evidence"]
+                pairs = size * (size - 1) // 2
+                # The permitted figure, the pair count, is exact and consistent.
+                self.assertEqual((indicators["pairs"], evidence["pairs"], view["metrics"]["pairs_sharing_two"]), (pairs, pairs, pairs))
+                # Nothing says how many groups there are, how many were withheld, or how many reviewers they hold.
+                self.assertEqual((indicators["group_count"], indicators["groups"], evidence["reviewers_involved"]), (None, [], None))
+                self.assertIs(indicators["groups_withheld"], True)
+                self.assertIs(evidence["detail_withheld"], True)
+                headline = view["explanation"]["headline"]
+                self.assertEqual(headline, f"{pairs} reviewer pair{'' if pairs == 1 else 's'} share{'s' if pairs == 1 else ''} 2 or more businesses.")
+                self.assertNotIn("group", headline)
+                text = json.dumps(view)
+                self.assertIsNone(self.GROUPING.search(text), self.GROUPING.findall(text))
+                self.assertNotIn(f"{size} reviewers are involved", text)
+                # The drawing has no node for them and marks nothing as grouped.
+                self.assertFalse(any(node["group"] for node in view["network"]["nodes"]))
+                self.assertGreaterEqual(view["network"]["suppressed"]["reviewers"], size)
+                self.assert_publishes_no_identifier_or_label(view)
+
+    def test_grouping_is_shown_at_and_above_the_threshold(self):
+        for size in (5, 6):
+            with self.subTest(size=size):
+                view = self.investigation(members=set(range(1, size + 1)), shared=[MARKER_BUSINESS_B], reviewers=range(1, 14))
+                indicators, evidence = view["indicators"], view["indicators"]["evidence"]
+                pairs = size * (size - 1) // 2
+                self.assertEqual((indicators["group_count"], indicators["groups_withheld"], evidence["reviewers_involved"]), (1, False, size))
+                self.assertEqual(view["explanation"]["headline"], f"1 reviewer group shares 2 or more businesses ({pairs} reviewer pairs).")
+                self.assertEqual((indicators["groups"][0]["reviewers"], indicators["groups"][0]["pairs"]), (size, pairs))
+                self.assert_publishes_no_identifier_or_label(view)
+
+    def test_one_small_group_withholds_the_grouping_of_all(self):
+        # A described group of five beside a set of two: the count of groups would expose the small one.
+        mixed = self.investigation(
+            members={1, 2, 3, 4, 5}, shared=[MARKER_BUSINESS_B],
+            second=({6, 7}, [MARKER_BUSINESS_C]), reviewers=range(1, 14),
+        )
+        self.assertEqual(mixed["explanation"]["headline"], "11 reviewer pairs share 2 or more businesses.")
+        self.assertEqual((mixed["indicators"]["group_count"], mixed["indicators"]["groups_withheld"]), (None, True))
+        self.assertEqual([g["label"] for g in mixed["indicators"]["groups"]], ["Group 1"])
+        text = json.dumps({k: v for k, v in mixed.items() if k != "indicators"}) + json.dumps(mixed["indicators"]["evidence"])
+        self.assertIsNone(self.GROUPING.search(text), self.GROUPING.findall(text))
+
+    def test_empty_and_sparse_results_state_no_grouping_at_all(self):
+        nothing = self.investigation(members=set(), shared=[], others={1, 2})  # two histories, no overlap
+        self.assertEqual((nothing["indicators"]["pairs"], nothing["indicators"]["group_count"], nothing["indicators"]["groups_withheld"]), (0, 0, False))
+        self.assertEqual(nothing["explanation"]["headline"], "No repeated overlap observed in the retrieved review windows.")
+        sparse = self.investigation(members=set(), shared=[])  # no history at all
+        self.assertEqual((sparse["indicators"]["pairs"], sparse["indicators"]["group_count"], sparse["indicators"]["groups_withheld"]), (0, 0, False))
+        self.assertEqual(sparse["explanation"]["headline"], "Coordination cannot be assessed from this data.")
+        for view in (nothing, sparse):
+            self.assertIsNone(self.GROUPING.search(json.dumps(view)))
+
     def test_threshold_is_applied_per_group_not_to_the_total(self):
         # A group of 3 and a group of 2: five reviewers in total, but each set is small.
         two_small = self.investigation(
@@ -814,7 +874,7 @@ class OverlapEvidenceTests(unittest.TestCase):
             second=({4, 5}, [MARKER_BUSINESS_C]), reviewers=range(1, 12),
         )
         indicators, evidence = two_small["indicators"], two_small["indicators"]["evidence"]
-        self.assertEqual((indicators["group_count"], indicators["groups"], indicators["groups_withheld"]), (2, [], 2))
+        self.assertEqual((indicators["group_count"], indicators["groups"], indicators["groups_withheld"]), (None, [], True))
         self.assertEqual((evidence["reviewers_involved"], evidence["detail_withheld"]), (None, True))
         self.assertFalse(any("5 reviewers are involved" in s for s in evidence["observed_statements"]))
         # A group of 5 beside a group of 2: the large group is described, the total is not.
@@ -823,7 +883,8 @@ class OverlapEvidenceTests(unittest.TestCase):
             second=({6, 7}, [MARKER_BUSINESS_C]), reviewers=range(1, 14),
         )
         indicators, evidence = mixed["indicators"], mixed["indicators"]["evidence"]
-        self.assertEqual(([g["reviewers"] for g in indicators["groups"]], indicators["groups_withheld"]), ([5], 1))
+        self.assertEqual(([g["reviewers"] for g in indicators["groups"]], indicators["groups_withheld"]), ([5], True))
+        self.assertIsNone(indicators["group_count"])
         self.assertEqual(evidence["reviewers_involved"], None)
         self.assertFalse(any("7 reviewers" in s for s in evidence["observed_statements"]))
         for view in (two_small, mixed):
@@ -840,7 +901,7 @@ class OverlapEvidenceTests(unittest.TestCase):
     def test_five_or_more_reviewers_are_described_by_counts_only(self):
         view = self.investigation(members={1, 2, 3, 4, 5}, shared=[MARKER_BUSINESS_B], reviewers=range(1, 12))
         indicators = view["indicators"]
-        self.assertEqual((indicators["group_count"], indicators["groups_withheld"]), (1, 0))
+        self.assertEqual((indicators["group_count"], indicators["groups_withheld"]), (1, False))
         group = indicators["groups"][0]
         self.assertEqual((group["reviewers"], group["pairs"], group["shared_businesses"]), (5, 10, 2))
         for key in ("members", "businesses", "node_ids"):
@@ -853,7 +914,7 @@ class OverlapEvidenceTests(unittest.TestCase):
     def test_synthetic_demo_still_shows_repeated_overlap_in_full(self):
         view = synthetic_view()
         indicators, evidence = view["indicators"], view["indicators"]["evidence"]
-        self.assertEqual((indicators["group_count"], len(indicators["groups"]), indicators["groups_withheld"]), (2, 2, 0))
+        self.assertEqual((indicators["group_count"], len(indicators["groups"]), indicators["groups_withheld"]), (2, 2, False))
         self.assertEqual(len(indicators["groups"][0]["members"]), 5)
         self.assertIn("node_ids", indicators["groups"][0])
         self.assertEqual((evidence["pairs"], evidence["reviewers_involved"], evidence["businesses_shared"], evidence["strongest_pair"]), (11, 7, 6, 4))
@@ -868,7 +929,7 @@ class OverlapEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["observed_statements"], ["No reviewer pair shares 2 or more businesses within the retrieved data."])
         self.assertIn("This is not a finding that no overlap exists.", evidence["limit_statements"][0])
         self.assertEqual(view["explanation"]["headline"], "No repeated overlap observed in the retrieved review windows.")
-        self.assertEqual(view["indicators"]["groups_withheld"], 0)
+        self.assertIs(view["indicators"]["groups_withheld"], False)
 
     def test_without_two_histories_the_panel_says_overlap_was_not_assessed(self):
         for others, phrase in ((set(), "none was"), ({3}, "only 1 was")):

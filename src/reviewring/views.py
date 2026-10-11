@@ -407,9 +407,11 @@ def _indicator_section(
     return {
         "minimum_shared_businesses": MIN_SHARED_BUSINESSES,
         "pairs": sum(group.pairs for group in groups),
-        "group_count": len(groups),
+        # How reviewers group is withheld whenever any group is below the minimum
+        # size, so then neither the number of groups nor the number withheld is sent.
+        "group_count": None if withheld else len(groups),
         "groups": rows,
-        "groups_withheld": withheld,
+        "groups_withheld": withheld > 0,
         "evidence": _overlap_evidence(graph, groups, categories, coverage, detailed=names is not None),
     }
 
@@ -612,7 +614,13 @@ def _explanation(
     minimum = indicators["minimum_shared_businesses"]
     history_gap = coverage["reviewers"] - coverage["reviewers_with_history"]
     compared = coverage["reviewers_with_history"]
-    if indicators["group_count"]:
+    if indicators["pairs"] and indicators["group_count"] is None:
+        # Grouping is withheld for small sets: the pair count is the permitted figure.
+        headline = (
+            f"{_plural(indicators['pairs'], 'reviewer pair')} "
+            f"{'shares' if indicators['pairs'] == 1 else 'share'} {minimum} or more businesses."
+        )
+    elif indicators["pairs"]:
         headline = (
             f"{_plural(indicators['group_count'], 'reviewer group')} "
             f"{'shares' if indicators['group_count'] == 1 else 'share'} {minimum} or more businesses "
@@ -647,7 +655,7 @@ def _explanation(
             )
             + ". A business shared outside a retrieved window would not be seen."
         )
-    if indicators["group_count"]:
+    if indicators["pairs"]:
         caution = (
             "Sharing several unrelated businesses is a structural pattern worth a closer look. "
             "It is not proof of fraud or of any arrangement between reviewers: neighbours, "
@@ -671,7 +679,7 @@ def _explanation(
             "reviewer in common. They come from separate collections and are not one investigation."
         )
 
-    if indicators["group_count"]:
+    if indicators["pairs"]:
         # Pairs are counted across all collected reviewers, not only those with a history.
         assessment = {
             "assessable": True,

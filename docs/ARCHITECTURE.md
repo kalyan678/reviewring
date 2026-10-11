@@ -228,7 +228,7 @@ The consequence is stated plainly in the README: within one investigation, any f
 **Residual inference.** The stage limits disclosure; it does not make reviewers anonymous.
 
 - Availability says that some pair of reviewers with retrieved histories shares a further business.
-- The plan states the exact number of new requests, because that is what the user confirms. A number lower than asked for means fewer businesses qualify or a page is already saved; the statement does not say which. Hiding it would mean overstating the cost, and the result would reveal it anyway.
+- The plan states the maximum number of new requests, because that is what the user confirms and what the server enforces. Fewer may be sent if a request fails. A number lower than asked for means fewer businesses qualify or a page is already saved; the statement does not say which. Hiding it would mean overstating the cost, and the result would reveal it anyway.
 - After expansion, the number of expanded businesses, the reviews on each page, and the before-and-after counts describe a small group in aggregate.
 - Whoever runs the server can read the saved responses directly.
 
@@ -301,7 +301,7 @@ Group focus is offered only for groups whose view row carries node identifiers, 
 When a few real reviewers share businesses, the page explains what was found without describing them. The summary is built in `views._overlap_evidence`.
 
 - **Shown for real data:** the number of reviewer pairs sharing two or more businesses; how many businesses are shared and the most any one pair shares, each as a band ("2", "3 to 4", "5 to 9", "10 or more"); and how many categories those businesses fall in, also as a band, with no category names.
-- **Withheld when any group has fewer than five reviewers:** how many reviewers are involved, how they group, who they are, any per-reviewer link, and any list of the businesses they share. A group this small gets no group card at all, and the network draws no node or link for it. The threshold is applied to each group, not to the total, so two small groups are never summed into a count that would reveal their sizes.
+- **Withheld when any group has fewer than five reviewers:** how many reviewers are involved, how they group, who they are, any per-reviewer link, and any list of the businesses they share. "How they group" includes the number of groups and the number withheld: the view then carries no group count (`group_count` is null and `groups_withheld` is only true or false), and the headline gives the pair count alone. A group this small gets no group card at all, and the network draws no node or link for it. The threshold is applied to each group, not to the total, so two small groups are never summed into a count that would reveal their sizes.
 - **Shown for five or more reviewers:** each group's size, pair count, and shared-business count. Still no member list.
 - **Always shown beside it:** that shared businesses alone do not show an arrangement, how many reviewers had a history retrieved, how many of those histories are partial or of unknown completeness, and, when nothing overlaps, that this is not a finding that no overlap exists.
 - **Synthetic demo:** unchanged. Every group is listed with its fictional members and businesses and can be highlighted in the network.

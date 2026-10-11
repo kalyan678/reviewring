@@ -107,7 +107,7 @@ function showBanner(mode) {
       banner,
       el("strong", {}, "Live investigation"),
       document.createTextNode(
-        " Collects real data through SerpApi and uses your credits, only after you confirm each step. Results are shown as totals and groups: no reviewer is named."
+        " Sends requests to SerpApi on your own plan, only after you confirm each step. Results are shown as totals and groups: no reviewer is named."
       )
     );
   } else if (mode === "synthetic") {
@@ -392,7 +392,7 @@ function renderIndicators(view) {
     return ul;
   };
   const parts = [];
-  if (!ind.group_count) parts.push(el("p", { class: "verdict" }, ind.evidence.assessed ? "No group found." : "Overlap not assessed."));
+  if (!evidence.observed) parts.push(el("p", { class: "verdict" }, ind.evidence.assessed ? "No group found." : "Overlap not assessed."));
   if (evidence.observed) {
     // The server's own figures. Where it withholds one for a small group, the page says so and shows nothing in its place.
     const withheld = "Withheld";
@@ -400,7 +400,7 @@ function renderIndicators(view) {
     facts.append(
       fact(evidence.pairs, `reviewer ${evidence.pairs === 1 ? "pair" : "pairs"} sharing ${ind.minimum_shared_businesses}+ businesses`),
       fact(evidence.detail_withheld ? withheld : evidence.reviewers_involved, "reviewers involved"),
-      fact(evidence.detail_withheld ? withheld : ind.group_count, ind.group_count === 1 ? "group" : "groups"),
+      fact(ind.group_count === null ? withheld : ind.group_count, ind.group_count === 1 ? "group" : "groups"),
       fact(evidence.businesses_shared, "businesses shared"),
       fact(evidence.strongest_pair, "most shared by one pair")
     );
@@ -783,9 +783,10 @@ function syncSteps() {
 
 function askConfirm(plan, run) {
   pending = run;
+  // The server's maximum, as a number of requests. What SerpApi bills for them is its own matter.
   $("confirm-cost").textContent = plan.max_requests === 0
-    ? "No new request \u00b7 0 credits"
-    : `At most ${plural(plan.max_requests, "new SerpApi request")} \u00b7 ${plural(plan.max_requests, "credit")}`;
+    ? "No new SerpApi request"
+    : `At most ${plural(plan.max_requests, "new SerpApi request")}`;
   $("confirm-text").textContent = plan.business ? `${plan.business}: ${plan.statement}` : plan.statement;
   $("confirm-yes").textContent = plan.max_requests === 0 ? "Continue (no request sent)" : "Confirm and send";
   $("confirm").hidden = false;
@@ -875,7 +876,7 @@ function renderExpansion(expansion) {
   $("expansion-statement").textContent = expansion.statement;
   // The businesses are never named here; the count offered is the fixed per-step maximum.
   $("expansion-summary").textContent = expansion.available
-    ? `Expansion is available: up to ${plural(expansion.max_businesses, "shared business", "shared businesses")}, one SerpApi request each. The server chooses them and does not name them. You confirm the exact cost before anything is sent.`
+    ? `Expansion is available: up to ${plural(expansion.max_businesses, "shared business", "shared businesses")}, one SerpApi request each. The server chooses them and does not name them. You are shown the most it can send and confirm before anything is sent.`
     : expansion.performed ? "No further business qualifies for expansion." : "Expansion is not available for this investigation.";
   $("expansion-why").textContent = expansion.available ? "Why it is available, and what it collects" : "Why it is not available";
   $("expansion-form").hidden = !expansion.available;

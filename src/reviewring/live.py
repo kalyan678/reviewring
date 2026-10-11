@@ -55,6 +55,9 @@ from reviewring.views import INVESTIGATION, build_view, expansion_summary
 
 # Safety net across all plans: new requests one server process may attempt.
 PROCESS_REQUEST_CEILING = 30
+# ReviewRing counts requests. What SerpApi bills for them depends on the user's
+# plan and is not something this code knows, so plans state it as a possibility.
+BILLING_NOTE = "Each request sent may use a search credit from your SerpApi plan."
 PLAN_LIFETIME_SECONDS = 600
 MAX_STORED = 20  # plans, searches, and investigations kept in memory
 MAX_RESULTS = 20
@@ -191,7 +194,7 @@ class LiveState:
         statement = (
             "No SerpApi request: this search is already saved on this computer."
             if saved
-            else "At most 1 SerpApi request (1 credit) for this search."
+            else f"At most 1 SerpApi request for this search. {BILLING_NOTE}"
         )
         plan_id = self._add_plan("search", max_requests, {"query": query})
         return {"plan": plan_id, "max_requests": max_requests, "statement": statement}
@@ -288,7 +291,7 @@ class LiveState:
         )
 
         def requests(count: int) -> str:
-            return f"At most {count} SerpApi request{'s' if count != 1 else ''} ({count} credit{'s' if count != 1 else ''})"
+            return f"At most {count} SerpApi request{'s' if count != 1 else ''}"
 
         # Saved pages show exactly which pages and histories would be new. No request is made.
         saved_pages, known = self._saved_review_pages(business["data_id"], page_count)
@@ -346,6 +349,8 @@ class LiveState:
                 f"This could need {max_requests} new requests, more than the {remaining} this server may still "
                 "send before its safety limit. Choose fewer pages or histories, or restart the server.",
             )
+        if max_requests:
+            statement = f"{statement} {BILLING_NOTE}"
         plan_id = self._add_plan(
             "investigation",
             max_requests,
@@ -553,13 +558,15 @@ class LiveState:
         if new == 0:
             cost = "No SerpApi request: nothing new needs to be requested for this expansion."
         else:
-            cost = f"At most {new} SerpApi request{'s' if new != 1 else ''} ({new} credit{'s' if new != 1 else ''})."
+            cost = f"At most {new} SerpApi request{'s' if new != 1 else ''}."
         statement = (
             f"{cost} Expansion collects the first review page of up to {businesses} shared "
             f"business{'' if businesses == 1 else 'es'} chosen by the server. Fewer are collected if fewer "
-            "qualify, and a page already saved on this computer costs nothing. It requests no reviewer "
-            "histories and no further pages, and it does not continue to other businesses afterwards."
+            "qualify, and a page already saved on this computer is read locally with no request. It requests "
+            "no reviewer histories and no further pages, and it does not continue to other businesses afterwards."
         )
+        if new:
+            statement = f"{statement} {BILLING_NOTE}"
         plan_id = self._add_plan("expansion", new, {"investigation": investigation_id, "candidates": chosen})
         return {"plan": plan_id, "businesses": businesses, "max_requests": new, "statement": statement}
 

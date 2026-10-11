@@ -338,7 +338,10 @@ class StaticPageTests(unittest.TestCase):
         for value in ("evidence.pairs", "evidence.reviewers_involved", "ind.group_count", "evidence.businesses_shared", "evidence.strongest_pair"):
             self.assertIn(value, panel)
         self.assertIn('evidence.detail_withheld ? withheld : evidence.reviewers_involved', panel)
-        self.assertIn('evidence.detail_withheld ? withheld : ind.group_count', panel)
+        self.assertIn('ind.group_count === null ? withheld : ind.group_count', panel)
+        # The page never works a withheld figure out for itself.
+        for computed in ("groups.length", "group_count ||", "group_count ??", "ind.groups.length ?"):
+            self.assertNotIn(computed, panel.replace("if (ind.groups.length) {", ""))
         self.assertIn("not evidence of fraud or of any arrangement", panel)
         self.assertIn("Only collected data was compared: review histories for", panel)
 
@@ -372,9 +375,19 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("expansion.next_businesses", script)
         real = script[script.index("function renderExpansion(expansion) {"):script.index("function finishInvestigation")]
         self.assertNotIn("next_businesses", real)
-        self.assertIn("The server chooses them and does not name them. You confirm the exact cost before anything is sent.", real)
+        self.assertIn("The server chooses them and does not name them. You are shown the most it can send and confirm before anything is sent.", real)
         self.assertIn('id="expansion-statement"', html)
         self.assertIn('id="demo-statement"', html)
+
+    def test_page_states_requests_and_never_a_price(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        self.assertIn('`At most ${plural(plan.max_requests, "new SerpApi request")}`', script)
+        self.assertIn('"No new SerpApi request"', script)
+        for wrong in ("exact cost", "0 credits", '"credit")', "costs nothing", " free"):
+            self.assertNotIn(wrong, html + script)
+        # Sent, limit and reused are reported as separate figures after a run.
+        self.assertIn('sent (limit ${status.max_requests}), ${plural(status.saved_responses_used, "saved response")} reused', script)
+        self.assertIn("You are told the most requests it can send before anything is sent", html)
 
     def test_missing_key_state_points_to_the_demo_and_to_setup(self):
         html, script = self.sources["index.html"], self.sources["app.js"]

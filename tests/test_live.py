@@ -13,6 +13,7 @@ Run from the project root:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import threading
@@ -452,7 +453,9 @@ class LiveStateTests(unittest.TestCase):
         self.assertEqual((view["metrics"]["reviewers"], view["metrics"]["businesses"], view["metrics"]["pairs_sharing_two"]), (6, 2, 1))
         # Two real reviewers overlap: reported as evidence, never as a described group.
         indicators = view["indicators"]
-        self.assertEqual((indicators["group_count"], indicators["groups"], indicators["groups_withheld"]), (1, [], 1))
+        self.assertEqual((indicators["group_count"], indicators["groups"], indicators["groups_withheld"]), (None, [], True))
+        self.assertEqual(status["view"]["explanation"]["headline"], "1 reviewer pair shares 2 or more businesses.")
+        self.assertIsNone(re.search(r"\b\d+ (?:reviewer )?groups?\b", json.dumps(status)))
         self.assertEqual((indicators["evidence"]["pairs"], indicators["evidence"]["reviewers_involved"]), (1, None))
         self.assertTrue(indicators["evidence"]["detail_withheld"])
         self.assertTrue(view["explanation"]["assessment"]["assessable"])
@@ -881,7 +884,8 @@ class MultiPagePlanningTests(unittest.TestCase):
 
     def test_one_page_plan_wording_is_unchanged(self):
         statement = self.state.plan_investigation(self.ref, 2)["statement"]
-        self.assertTrue(statement.startswith("At most 3 SerpApi requests (3 credits): 1 for the first page of reviews and up to 2 for reviewer histories."))
+        self.assertTrue(statement.startswith("At most 3 SerpApi requests: 1 for the first page of reviews and up to 2 for reviewer histories."))
+        self.assertTrue(statement.endswith(live.BILLING_NOTE))
 
     def test_execution_never_exceeds_the_planned_maximum(self):
         status = self.run_plan(self.state.plan_investigation(self.ref, 2, None, 3))
@@ -1085,7 +1089,32 @@ class ExpansionWorkflowTests(unittest.TestCase):
         self.assertIn("needs at least two reviewers with a retrieved history, and none was retrieved", none["statement"])
         self.assertEqual(self.api.new_requests, sent + 1)  # only the second investigation's review page
 
-    def test_plan_is_validated_and_states_the_exact_cost(self):
+    def test_cost_statements_give_a_request_maximum_and_never_a_billing_rate(self):
+        """What the server promises is a ceiling on requests. What SerpApi bills is not its to state."""
+        search = self.state.plan_search("another bakery in testville")
+        self.assertEqual(search["statement"], f"At most 1 SerpApi request for this search. {live.BILLING_NOTE}")
+        ref = self.state.run_search(self.state.plan_search("bakery in testville")["plan"])["businesses"][0]["ref"]
+        saved_search = self.state.plan_search("bakery in testville")
+        self.assertEqual((saved_search["max_requests"], saved_search["statement"]), (0, "No SerpApi request: this search is already saved on this computer."))
+        first = self.state.plan_investigation(ref, 2)
+        self.assertEqual(first["max_requests"], 3)
+        self.assertTrue(first["statement"].endswith(live.BILLING_NOTE))
+        started = self.state.start_investigation(first["plan"])
+        self.wait(started["investigation"])
+        done = self.state.investigation_status(started["investigation"])
+        # Planned maximum, requests actually sent, and saved responses are three separate figures.
+        self.assertEqual((done["max_requests"], done["requests_sent"], done["saved_responses_used"]), (3, 3, 0))
+        again = self.state.plan_investigation(ref, 2)
+        self.assertEqual(again["max_requests"], 0)
+        self.assertNotIn(live.BILLING_NOTE, again["statement"])
+        expansion = self.state.plan_expansion(started["investigation"], 2)
+        self.assertTrue(expansion["statement"].startswith("At most 2 SerpApi requests. "))
+        self.assertTrue(expansion["statement"].endswith(live.BILLING_NOTE))
+        self.assertEqual(live.BILLING_NOTE, "Each request sent may use a search credit from your SerpApi plan.")
+        for statement in (search["statement"], first["statement"], again["statement"], expansion["statement"]):
+            self.assertIsNone(re.search(r"\(\d+ credits?\)|\b\d+ credits?\b|exact cost|costs nothing|free", statement), statement)
+
+    def test_plan_is_validated_and_states_the_maximum(self):
         investigation = self.investigate()
         sent = self.api.new_requests
         for bad in (0, 3, -1, "1", 1.0, True, None, [1]):
@@ -1095,10 +1124,10 @@ class ExpansionWorkflowTests(unittest.TestCase):
             self.assert_error(404, self.state.plan_expansion, missing, 1)
         one = self.state.plan_expansion(investigation, 1)
         self.assertEqual((one["businesses"], one["max_requests"]), (1, 1))
-        self.assertTrue(one["statement"].startswith("At most 1 SerpApi request (1 credit)."))
+        self.assertTrue(one["statement"].startswith("At most 1 SerpApi request."))
         two = self.state.plan_expansion(investigation, 2)
         self.assertEqual((two["businesses"], two["max_requests"]), (2, 2))
-        self.assertIn("At most 2 SerpApi requests (2 credits).", two["statement"])
+        self.assertIn("At most 2 SerpApi requests.", two["statement"])
         self.assertIn("requests no reviewer histories and no further pages", two["statement"])
         self.assertEqual(set(two), {"plan", "businesses", "max_requests", "statement"})
         self.assertEqual(self.api.new_requests, sent)  # planning sends nothing
@@ -1212,8 +1241,8 @@ class ExpansionWorkflowTests(unittest.TestCase):
         self.api.saved.add(key(review_page_params(EXTRA_X)))  # one of the two remaining pages is already saved
         plan = self.state.plan_expansion(investigation, 2)
         self.assertEqual(plan["max_requests"], 1)
-        self.assertTrue(plan["statement"].startswith("At most 1 SerpApi request (1 credit). Expansion collects the first review page of up to 2 shared businesses"))
-        self.assertIn("a page already saved on this computer costs nothing", plan["statement"])
+        self.assertTrue(plan["statement"].startswith("At most 1 SerpApi request. Expansion collects the first review page of up to 2 shared businesses"))
+        self.assertIn("a page already saved on this computer is read locally with no request", plan["statement"])
         self.state.start_expansion(plan["plan"], investigation)
         self.wait(investigation)
         status = self.state.investigation_status(investigation)

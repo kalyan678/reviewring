@@ -69,6 +69,36 @@ class HostedDemoTests(HostedServerTestCase):
         self.assertNotIn("Set-Cookie", headers)
         self.assertEqual(self.get("/favicon.ico")[0], 204)
 
+    def test_hosted_page_files_are_fixed_when_the_server_starts(self):
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            web = Path(tmp) / "web"
+            shutil.copytree(app.WEB_DIR, web)
+            with mock.patch.object(app, "WEB_DIR", web):
+                server = app.create_hosted_server(0, host="127.0.0.1")
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                try:
+                    def fetch(path):
+                        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+                        connection.request("GET", path)
+                        response = connection.getresponse()
+                        body = response.read().decode("utf-8")
+                        connection.close()
+                        return response.status, body
+
+                    before = fetch("/static/app.js")
+                    (web / "app.js").write_text("// edited after the server started\n", encoding="utf-8")
+                    (web / "app.css").unlink()
+                    self.assertEqual(fetch("/static/app.js"), before)
+                    self.assertEqual(fetch("/static/app.css")[0], 200)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+        # Later servers read the real files again.
+        app._HostedHandler.static = app._load_static()
+
     def test_synthetic_journey_matches_the_local_demo_at_every_step(self):
         for steps in range(MAX_EXPANSION_STEPS + 1):
             status, _, body = self.get(f"/api/view?mode=synthetic&expansions={steps}")

@@ -73,6 +73,14 @@ SECURITY_HEADERS = {
 }
 
 
+def _load_static() -> dict[str, tuple[bytes, str]]:
+    """The page files, read once. A running server keeps serving the files it
+    started with, so the script in the browser always matches the code that
+    answers it. Reading them per request would let an edited script reach a
+    server that is still running older code."""
+    return {path: ((WEB_DIR / name).read_bytes(), content_type) for path, (name, content_type) in STATIC_FILES.items()}
+
+
 class _Rejected(Exception):
     def __init__(self, status: int, message: str) -> None:
         super().__init__(message)
@@ -126,6 +134,7 @@ class _HostedHandler(_Responder):
     """
 
     timeout = HOSTED_REQUEST_TIMEOUT_SECONDS  # a stalled connection is dropped
+    static: dict[str, tuple[bytes, str]] = {}  # set when the server is created
 
     def _view(self, query: str) -> dict:
         try:
@@ -144,9 +153,8 @@ class _HostedHandler(_Responder):
     def _serve(self) -> None:
         url = urlsplit(self.path)
         try:
-            if url.path in STATIC_FILES and not url.query:
-                name, content_type = STATIC_FILES[url.path]
-                self._send(200, (WEB_DIR / name).read_bytes(), content_type)
+            if url.path in self.static and not url.query:
+                self._send(200, *self.static[url.path])
             elif url.path == "/favicon.ico":
                 self._send(204, b"", "image/x-icon")
             elif url.path == "/api/config" and not url.query:
@@ -173,6 +181,8 @@ class _HostedHandler(_Responder):
 
 def make_handler(raw_dir: Path, live: LiveState) -> type[BaseHTTPRequestHandler]:
     from reviewring.live import LiveError
+
+    static_files = _load_static()
 
     class Handler(_Responder):
         def _origin(self) -> str:
@@ -220,11 +230,10 @@ def make_handler(raw_dir: Path, live: LiveState) -> type[BaseHTTPRequestHandler]
 
         def do_GET(self) -> None:  # noqa: N802 (http.server naming)
             url = urlsplit(self.path)
-            if url.path in STATIC_FILES:
+            if url.path in static_files:
                 def static() -> None:
                     self._check_host()
-                    name, content_type = STATIC_FILES[url.path]
-                    self._send(200, (WEB_DIR / name).read_bytes(), content_type)
+                    self._send(200, *static_files[url.path])
 
                 try:
                     static()
@@ -316,6 +325,7 @@ def create_server(
 
 def create_hosted_server(port: int, host: str = HOSTED_HOST) -> ThreadingHTTPServer:
     """The public synthetic-only demo. Takes no data directory, key, or live state."""
+    _HostedHandler.static = _load_static()
     return ThreadingHTTPServer((host, port), _HostedHandler)
 
 

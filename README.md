@@ -25,6 +25,8 @@ Leave that command running. In a browser on the same computer, go to `http://127
 
 `127.0.0.1` is your own machine, not a website. The address answers only while `main.py` is running, and only on that computer; opening it anywhere else shows "This site can't be reached".
 
+After updating the code, stop the server and start it again, then reload the page. A running server keeps serving the page files it started with; if a page and a server from different versions do meet, the page says so and changes nothing.
+
 Run the tests (all offline, no key, no network):
 
 ```

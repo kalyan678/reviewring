@@ -78,9 +78,11 @@ async function load(mode) {
     const view = await request(`/api/view?mode=${mode}`);
     if (mode !== modeFromHash()) return; // a newer selection replaced this one
     if (!view.available) return showUnavailable(view);
+    if (mode === "synthetic" && !usableDemoView(view)) return showState("This page and the server do not match", VERSION_MISMATCH);
     show(view);
   } catch (error) {
     if (mode !== modeFromHash()) return;
+    $("dashboard").hidden = true; // never leave a half-drawn view on screen
     showState(
       "The view could not be loaded",
       hosted ? "The demo server may still be starting. Wait a few seconds, then reload." : "Check that the ReviewRing server is still running, then reload."
@@ -204,24 +206,52 @@ function renderDemoExpansion(view) {
   replace($("demo-limits"), ...expansion.limits.map((line) => el("li", {}, line)));
 }
 
+const VERSION_MISMATCH = "The server answered in a form this page does not understand. They are probably different versions: restart the ReviewRing server, then reload this page.";
+
+// Everything the demo's expansion panel and network read from the server's answer.
+function usableDemoView(view) {
+  const expansion = view && view.synthetic && view.expansion;
+  return Boolean(expansion) && Number.isInteger(expansion.steps) && typeof expansion.statement === "string" &&
+    ["new_nodes", "new_links", "comparison", "findings", "limits"].every((key) => Array.isArray(expansion[key])) &&
+    Boolean(view.network) && Array.isArray(view.network.nodes) && Array.isArray(view.network.links);
+}
+
+function demoError(message) {
+  $("demo-expand").disabled = false;
+  $("demo-error").textContent = message;
+  $("demo-error").hidden = false;
+}
+
+// A step is applied completely or not at all. Each way it can fail leaves the
+// last good network and its figures on screen and says which thing went wrong.
 async function loadDemoStep(steps) {
   $("demo-expand").disabled = true;
   $("demo-error").hidden = true;
+  let view;
   try {
-    const view = await request(`/api/view?mode=synthetic&expansions=${steps}`);
-    if (modeFromHash() !== "synthetic") return;
-    const advanced = view.expansion.steps > demoSteps;
+    view = await request(`/api/view?mode=synthetic&expansions=${steps}`);
+  } catch (error) {
+    return demoError("The server did not answer, so nothing was changed. Check that the ReviewRing server is still running, then try again.");
+  }
+  if (modeFromHash() !== "synthetic") return;
+  if (!usableDemoView(view)) return demoError(`Nothing was changed. ${VERSION_MISMATCH}`);
+  const previous = current;
+  const previousSteps = demoSteps;
+  const advanced = view.expansion.steps > demoSteps;
+  try {
     demoSteps = view.expansion.steps;
     entering = advanced;
     show(view);
-    entering = false;
-    $("demo-update").classList.toggle("fresh", advanced);
-    $("demo-expansion-title").focus();
   } catch (error) {
-    $("demo-expand").disabled = false;
-    $("demo-error").textContent = "The expansion could not be shown. Check that the ReviewRing server is still running, then try again.";
-    $("demo-error").hidden = false;
+    // Drawing failed part-way: put the previous view back whole.
+    entering = false;
+    demoSteps = previousSteps;
+    if (previous) show(previous);
+    return demoError("This step could not be drawn, so the previous network is still shown. Reload the page; if it happens again, restart the ReviewRing server.");
   }
+  entering = false;
+  $("demo-update").classList.toggle("fresh", advanced);
+  $("demo-expansion-title").focus();
 }
 
 function renderTiles(view) {

@@ -242,6 +242,20 @@ The synthetic demo can be expanded step by step so the whole journey can be seen
 - The view lists the nodes the latest step added or turned into a collected page (`new_nodes`) and the reviewer-business links first observed in that step (`new_links`), both computed by comparing the graph before and after the step. The page marks exactly those, and its notice counts them; it derives nothing itself. A link can be new between two nodes that were already drawn. Real views never carry the demo's expansion block.
 - What a step added fades in once, for the drawing made by that step only, and not at all under `prefers-reduced-motion`. Existing nodes are not animated, but the layout is recomputed for the larger graph, so they can move to new rows between steps.
 
+### Page files and failed steps
+
+The three page files are read once, when a server is created, and served from memory after that. A server therefore never hands out a script newer than the code answering it. Reading them per request allowed exactly that: a long-running server served an updated script that expected a field its older code did not send, and the page stopped half-way through drawing.
+
+The page also defends itself. Before the demo is drawn or a step is applied, the answer is checked for every field the page reads. A step is then applied whole or not at all, and each failure has its own message:
+
+| What failed | What stays on screen | Message |
+|---|---|---|
+| The request (no answer, or an error status) | Everything, unchanged, including a selection or group focus | The server did not answer |
+| The answer lacks a field the page reads | Everything, unchanged | Page and server are probably different versions: restart the server, then reload |
+| Drawing the answer raised an error | The previous view, redrawn whole | The step could not be drawn; the previous network is still shown |
+
+A successful step clears any earlier message. When the mismatch is found as the demo is first opened, the page shows a single "This page and the server do not match" state and no network.
+
 ### Network interaction
 
 The network is drawn once per view at fixed positions; nothing moves it afterwards. What is emphasised has two layers, both in the page only:

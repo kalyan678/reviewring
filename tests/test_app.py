@@ -19,6 +19,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # pyproject.toml has no build backend yet, so the src/ package is not installed.
@@ -118,6 +119,21 @@ class DashboardServerTests(unittest.TestCase):
         status, _, body = self.get("/api/config", headers={"Sec-Fetch-Site": "cross-site"})
         self.assertEqual(status, 403)
         self.assertNotIn("key_configured", body)
+
+    def test_page_files_are_fixed_when_the_server_starts(self):
+        """A running server must not hand out a script newer than its own code."""
+        import shutil
+
+        web = Path(self._tmp.name) / "web"
+        shutil.copytree(app.WEB_DIR, web)
+        with mock.patch.object(app, "WEB_DIR", web):
+            self.start()
+            before = self.get("/static/app.js")[2]
+            (web / "app.js").write_text("// edited after the server started\n", encoding="utf-8")
+            (web / "index.html").unlink()
+            self.assertEqual(self.get("/static/app.js")[2], before)
+            self.assertEqual(self.get("/")[0], 200)
+        self.assertIn("usableDemoView", before)
 
     def test_missing_saved_data_is_an_explicit_state_not_an_error(self):
         self.start()
@@ -278,7 +294,9 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("fresh.has(node.id)", script)
         self.assertIn('expansion.available ? "" : " (final step)"', script)
         # The entrance plays only for the drawing made by an expansion step, never on a redraw.
-        self.assertRegex(script, r"entering = advanced;\s+show\(view\);\s+entering = false;")
+        self.assertRegex(script, r"entering = advanced;\s+show\(view\);")
+        step = script[script.index("async function loadDemoStep"):script.index("function renderTiles")]
+        self.assertEqual(step.count("entering = false;"), 2)  # after a good drawing, and after a failed one
         self.assertIn('if (entering) root.setAttribute("class", "entering");', script)
         # All motion sits behind the reduced-motion preference.
         motion = css[css.index("@media (prefers-reduced-motion: no-preference)"):]
@@ -286,6 +304,25 @@ class StaticPageTests(unittest.TestCase):
         self.assertEqual(css.count("@keyframes"), motion.count("@keyframes"))
         self.assertNotIn("transition", css)
         self.assertNotIn("infinite", css)
+
+    def test_an_expansion_step_is_applied_whole_or_not_at_all(self):
+        script = self.sources["app.js"]
+        step = script[script.index("async function loadDemoStep"):script.index("function renderTiles")]
+        # The answer is checked before anything on screen changes.
+        self.assertLess(step.index("usableDemoView(view)"), step.index("show(view)"))
+        for needed in ('"new_nodes", "new_links", "comparison", "findings", "limits"', "Number.isInteger(expansion.steps)"):
+            self.assertIn(needed, script)
+        # A failed drawing restores the previous view and the previous step count.
+        self.assertRegex(step, r"catch \(error\) \{[\s\S]{0,160}demoSteps = previousSteps;\s+if \(previous\) show\(previous\);")
+        # Three different failures, three different messages; only one of them mentions the server being down.
+        self.assertEqual(script.count("Check that the ReviewRing server is still running, then try again."), 1)
+        self.assertIn("The server did not answer, so nothing was changed.", step)
+        self.assertIn("They are probably different versions: restart the ReviewRing server, then reload this page.", script)
+        self.assertIn("This step could not be drawn, so the previous network is still shown.", step)
+        self.assertNotIn("The expansion could not be shown", script)
+        # The first load of the demo is checked the same way, and a failed load hides the half-drawn view.
+        self.assertIn('if (mode === "synthetic" && !usableDemoView(view)) return showState("This page and the server do not match", VERSION_MISMATCH);', script)
+        self.assertIn('$("dashboard").hidden = true; // never leave a half-drawn view on screen', script)
 
     def test_group_focus_exists_only_for_groups_the_server_described(self):
         script = self.sources["app.js"]

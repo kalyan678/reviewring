@@ -555,8 +555,10 @@ class LiveStateTests(unittest.TestCase):
         self.assertIn("failed or timed out", status["stopped"])
 
     def test_missing_key_is_reported_without_any_request(self):
+        self.assertIs(self.state.key_configured(), True)
         self.api.key_configured = False
         self.assertIs(self.state.session_info()["key_configured"], False)
+        self.assertIs(self.state.key_configured(), False)
         plan = self.state.plan_search("bakery in testville")["plan"]
         with self.assertRaises(live.LiveError) as ctx:
             self.state.run_search(plan)

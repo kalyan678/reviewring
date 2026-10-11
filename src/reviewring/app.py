@@ -251,7 +251,13 @@ def make_handler(raw_dir: Path, live: LiveState) -> type[BaseHTTPRequestHandler]
 
                 self._respond(view)
             elif url.path == "/api/config":
-                self._respond(lambda: {"hosted_demo": False})
+                def config() -> dict:
+                    # Tells the page where to start. A yes or no, never the key.
+                    if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
+                        raise _Rejected(403, "Request not accepted.")
+                    return {"hosted_demo": False, "key_configured": live.key_configured()}
+
+                self._respond(config)
             elif url.path == "/api/session":
                 def session() -> dict:
                     # Readable only same-origin: no CORS header is ever sent.

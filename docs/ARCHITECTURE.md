@@ -259,7 +259,7 @@ The synthetic demo can be expanded step by step so the whole journey can be seen
 - The `Host` check of the local server (a defence against DNS rebinding on loopback) does not apply: a public server is reached under its own name and serves the same fictional data to everyone.
 - Each connection has a 15-second socket timeout. Errors are fixed messages.
 - The setting must be exactly `1`. Any other non-empty value stops the program, so a typo cannot start the local dashboard where the hosted demo was intended, or the reverse. Without it the default is unchanged: loopback, port 8765.
-- The page asks `/api/config` first. When hosted it hides the other two tabs and ignores the URL fragment. This is presentation only; the restrictions are enforced by the server.
+- The page asks `/api/config` first. Locally the answer also says whether a SerpApi key is configured, as a yes or no and nothing more, and the page opens on Investigate when one is and on Explore Demo when not. When hosted the answer has no such field, and the page hides the other two tabs and ignores the URL fragment. This is presentation only; the restrictions are enforced by the server.
 
 ### Security and privacy
 

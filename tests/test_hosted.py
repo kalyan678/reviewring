@@ -266,6 +266,8 @@ class StartupTests(unittest.TestCase):
         self.assertIn('$("mode-real").hidden = true;', script)
         self.assertIn('$("mode-investigate").hidden = true;', script)
         self.assertIn("This public demo serves only this fictional walkthrough.", script)
+        # Hosted always opens on the demo, whatever the server says about a key.
+        self.assertIn('startMode = !hosted && config.key_configured === true ? "investigate" : "synthetic";', script)
         self.assertIn('request("/api/config")', script)
 
 

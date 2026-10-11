@@ -11,6 +11,7 @@ let current = null; // the view being shown
 let selection = null; // { ids: Set, title, lines, pinned }
 let demoSteps = 0; // expansion steps applied to the synthetic demo; reset whenever the demo is opened
 let hosted = false; // true when the server is the public demo, which serves fictional data only
+let startMode = "synthetic"; // where the page opens when the address names no tab; set from the server's answer
 
 function el(tag, attrs = {}, text) {
   const node = document.createElement(tag);
@@ -39,7 +40,7 @@ function plural(count, noun, pluralNoun = `${noun}s`) {
 function modeFromHash() {
   if (hosted) return "synthetic"; // the public demo has no other mode
   const mode = location.hash.slice(1);
-  return MODES.includes(mode) ? mode : "synthetic"; // the demo needs nothing, so it is the starting point
+  return MODES.includes(mode) ? mode : startMode;
 }
 
 // The one place the page talks to the server. Paths are always same-origin.
@@ -94,6 +95,7 @@ function showBanner(mode) {
   $("network-use").textContent = hosted ? NETWORK_USE.hosted : mode === "investigate" ? NETWORK_USE.investigate : NETWORK_USE.offline;
   const banner = $("banner");
   banner.className = mode === "synthetic" ? "banner synthetic" : "banner";
+  $("demo-about").hidden = mode !== "synthetic";
   if (mode === "investigate") {
     replace(
       banner,
@@ -105,20 +107,18 @@ function showBanner(mode) {
   } else if (mode === "synthetic") {
     replace(
       banner,
-      el("strong", {}, "SYNTHETIC DEMO"),
-      document.createTextNode(
-        " Every business, reviewer and rating here is fictional, invented to show what an overlap pattern looks like. Nothing describes a real business or person."
-      ),
+      el("strong", {}, "Fictional data"),
+      document.createTextNode(" Invented reviewers and businesses. No SerpApi key, request or credit is used."),
       hosted
-        ? el("span", { class: "hosted-note" }, " This public demo serves only this fictional walkthrough. Investigating real businesses through SerpApi is switched off here; it runs on your own computer with your own key.")
+        ? el("span", { class: "hosted-note" }, " This public demo serves only this fictional walkthrough. Live investigation is switched off here and runs only on your own computer.")
         : null
     );
   } else {
     replace(
       banner,
-      el("strong", {}, "Collected sample"),
+      el("strong", {}, "Collected data"),
       document.createTextNode(
-        " Combines every SerpApi Google Maps response saved on this computer, from all searches and investigations, which may be unrelated. Shown as totals and groups only: no reviewer or business is named."
+        " Read-only. Everything saved on this computer, from all searches and investigations, which may be unrelated. It is not one investigation. Totals and groups only: no reviewer or business is named."
       )
     );
   }
@@ -131,11 +131,11 @@ function showState(title, message, action) {
 }
 
 function showUnavailable(view) {
-  const button = el("button", { type: "button" }, "Open the synthetic demo");
+  const button = el("button", { type: "button" }, "Explore the demo");
   button.addEventListener("click", () => { location.hash = "synthetic"; });
   showState(
-    "No collected sample on this computer",
-    `${view.reason} Saved responses are kept locally and are not part of the repository. The synthetic demo needs no saved data.`,
+    "No collected data on this computer",
+    `${view.reason} Responses are saved here when you run an investigation, and they are not part of the repository. The demo needs no saved data.`,
     button
   );
 }
@@ -211,7 +211,7 @@ function renderTiles(view) {
     [m.reviewers, "reviewers"],
     [m.businesses, "businesses"],
     [m.edges, "reviewer-business links"],
-    [m.pairs_sharing_two, `reviewer pairs sharing ${minimum}+ businesses`, true],
+    [m.pairs_sharing_two, `pairs sharing ${minimum}+ businesses`, true],
   ];
   // After an expansion of the demo, each figure also shows how it changed.
   const compared = new Map(((view.synthetic && view.expansion && view.expansion.comparison) || []).map((row) => [row.key, row]));
@@ -495,9 +495,12 @@ function renderNetwork(view) {
   $("network-note").textContent = network.aggregated
     ? "Reviewers with the same connections are merged into one circle, sized by how many they are. Businesses are labelled by letter. Individual reviewers are not shown."
     : "Each circle is one fictional reviewer and each square one fictional business. A line means that reviewer reviewed that business.";
+  $("network-chip").hidden = !view.synthetic;
+  $("network-suppressed").hidden = true;
   const hidden = network.suppressed;
   if (hidden && hidden.reviewers) {
-    $("network-note").textContent += ` ${plural(hidden.reviewers, "reviewer")} with ${plural(hidden.links, "link")} ${hidden.reviewers === 1 ? "is" : "are"} not drawn: fewer than ${hidden.minimum_group_size} reviewers share that connection pattern, and drawing it would single them out. The totals above still include them.`;
+    $("network-suppressed").hidden = false;
+    $("network-suppressed").textContent = `${plural(hidden.reviewers, "reviewer")} with ${plural(hidden.links, "link")} ${hidden.reviewers === 1 ? "is" : "are"} not drawn: fewer than ${hidden.minimum_group_size} reviewers share that connection pattern, and drawing it would single them out. The totals above still include them.`;
   }
 
   const container = $("graph");
@@ -853,11 +856,16 @@ window.addEventListener("resize", () => {
 // Ask the server which kind it is before showing anything. If that fails the
 // page behaves as the local dashboard, and a hosted server refuses those requests.
 async function start() {
+  let config = {};
   try {
-    hosted = (await request("/api/config")).hosted_demo === true;
+    config = await request("/api/config");
   } catch (error) {
-    hosted = false;
+    config = {};
   }
+  hosted = config.hosted_demo === true;
+  // The server says whether a key is configured; the page never sees the key.
+  // With one, the working tool comes first; without one, the demo does.
+  startMode = !hosted && config.key_configured === true ? "investigate" : "synthetic";
   if (hosted) {
     $("mode-real").hidden = true;
     $("mode-investigate").hidden = true;

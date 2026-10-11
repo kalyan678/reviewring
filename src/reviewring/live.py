@@ -161,6 +161,10 @@ class LiveState:
 
     # ---------- session ----------
 
+    def key_configured(self) -> bool:
+        """Whether a SerpApi key is configured. The key itself never leaves the client module."""
+        return bool(self._key_configured())
+
     def session_info(self) -> dict[str, Any]:
         return {
             "token": self.token,

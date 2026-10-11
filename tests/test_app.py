@@ -50,8 +50,8 @@ class DashboardServerTests(unittest.TestCase):
         self.server = app.create_server(port=0, raw_dir=self.raw_dir, live=state)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def get(self, path: str):
-        url = f"http://127.0.0.1:{self.server.server_address[1]}{path}"
+    def get(self, path: str, headers: dict | None = None):
+        url = urllib.request.Request(f"http://127.0.0.1:{self.server.server_address[1]}{path}", headers=headers or {})
         try:
             with urllib.request.urlopen(url, timeout=10) as response:
                 return response.status, dict(response.headers), response.read().decode("utf-8")
@@ -109,6 +109,15 @@ class DashboardServerTests(unittest.TestCase):
         # The parameter belongs to the fictional demo only.
         status, _, body = self.get("/api/view?mode=real&expansions=1")
         self.assertEqual((status, "expansion" in json.loads(body)), (200, False))
+
+    def test_config_reports_whether_a_key_is_configured_and_nothing_else(self):
+        self.start()  # this server's state reports no key
+        status, headers, body = self.get("/api/config")
+        self.assertEqual((status, json.loads(body)), (200, {"hosted_demo": False, "key_configured": False}))
+        self.assertNotIn("Access-Control-Allow-Origin", headers)
+        status, _, body = self.get("/api/config", headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(status, 403)
+        self.assertNotIn("key_configured", body)
 
     def test_missing_saved_data_is_an_explicit_state_not_an_error(self):
         self.start()
@@ -232,8 +241,41 @@ class StaticPageTests(unittest.TestCase):
         self.assertNotIn("post(", script[start:start + 800])
 
     def test_synthetic_mode_is_conspicuously_labelled(self):
-        self.assertIn("SYNTHETIC DEMO", self.sources["app.js"])
+        self.assertIn('el("strong", {}, "Fictional data")', self.sources["app.js"])
         self.assertIn("fictional", self.sources["app.js"])
+        html = self.sources["index.html"]
+        # The label is on the strip, the network and the expansion panel, with detail one click away.
+        self.assertEqual(html.count('chip chip-fictional'), 2)
+        self.assertIn("About the demo data", html)
+        self.assertIn("Nothing was collected from SerpApi or Google Maps", html)
+
+    def test_tabs_are_three_independent_workspaces_in_the_agreed_order(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        order = [html.index(f'id="mode-{name}"') for name in ("investigate", "synthetic", "real")]
+        self.assertEqual(order, sorted(order))
+        for label in (">Investigate</button>", ">Explore Demo</button>", ">Collected Data</button>"):
+            self.assertIn(label, html)
+        self.assertIn("It is not one investigation.", script)
+        for word in ("Case history", "case management", "Cases"):
+            self.assertNotIn(word, html + script)
+
+    def test_landing_tab_follows_the_servers_answer_not_a_guess(self):
+        script = self.sources["app.js"]
+        self.assertIn('startMode = !hosted && config.key_configured === true ? "investigate" : "synthetic";', script)
+        self.assertIn("return MODES.includes(mode) ? mode : startMode;", script)
+        # The page never handles a key: the only mention is the instruction naming the variable.
+        self.assertNotIn("api_key", script)
+        self.assertNotIn("SERPAPI_API_KEY", script)
+
+    def test_the_permanent_caveat_is_never_inside_a_collapsed_section(self):
+        html = self.sources["index.html"]
+        caveat = "Observed overlap is a pattern to look into. It does not establish coordination, fraud, or any wrongdoing."
+        self.assertEqual(html.count(caveat), 1)
+        before = html[:html.index(caveat)]
+        self.assertEqual(before.count("<details"), before.count("</details>"))
+        for collapsed in ("How to read the network", "How to read these figures", "View connections as a table", "What this does not show"):
+            self.assertIn(collapsed, html)
+        self.assertNotIn("<details open", html)
 
     def test_viewing_code_never_imports_the_serpapi_client_or_loads_a_key(self):
         # Only reviewring.live (live investigations) reaches the client.

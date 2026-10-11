@@ -17,13 +17,18 @@
       </div>
     </div>
     <div class="modes" role="group" aria-label="Data shown">
-      <button type="button" id="mode-synthetic" aria-pressed="false">Synthetic demo</button>
       <button type="button" id="mode-investigate" aria-pressed="false">Investigate</button>
-      <button type="button" id="mode-real" aria-pressed="false">Collected sample</button>
+      <button type="button" id="mode-synthetic" aria-pressed="false">Explore Demo</button>
+      <button type="button" id="mode-real" aria-pressed="false">Collected Data</button>
     </div>
   </header>
 
   <div id="banner" class="banner" role="status"></div>
+  <details id="demo-about" class="more demo-about" hidden>
+    <summary>About the demo data</summary>
+    <p class="muted">Every reviewer, business, rating and review page in this demo was invented for it. Nothing was collected from SerpApi or Google Maps, and nothing describes a real business or person. The demo is built to show two things side by side: a group of reviewers who share several unrelated businesses, and an everyday pair who both used a cafe and a grocer.</p>
+    <p class="muted">It runs through the same graph, overlap and expansion code as a real investigation, so what you see is how real observations would be presented. Its figures are not findings about anyone.</p>
+  </details>
 
   <main id="main">
     <section id="investigate" class="card investigate" aria-labelledby="investigate-title" hidden>
@@ -112,11 +117,11 @@
         <div class="summary-text">
           <h2 id="explain-title" class="eyebrow">What this shows</h2>
           <p id="headline" class="headline"></p>
-          <p class="caveat">Overlap is a pattern to look into. It does not establish coordination, fraud, or any wrongdoing.</p>
+          <p class="caveat">Observed overlap is a pattern to look into. It does not establish coordination, fraud, or any wrongdoing.</p>
         </div>
         <div class="tiles" aria-label="Key figures" id="tiles"></div>
         <details class="more">
-          <summary>How to read this</summary>
+          <summary>How to read these figures</summary>
           <p id="assessment" class="note"></p>
           <ul id="points" class="points"></ul>
         </details>
@@ -125,10 +130,10 @@
       <div class="workspace">
         <section class="card network-card" aria-labelledby="network-title">
           <div class="card-head">
-            <h2 id="network-title">Reviewer and business network</h2>
+            <h2 id="network-title">Reviewer and business network <span id="network-chip" class="chip chip-fictional" hidden>Fictional data</span></h2>
             <button type="button" id="clear" class="quiet" hidden>Clear selection</button>
           </div>
-          <p id="network-note" class="muted"></p>
+          <p id="network-suppressed" class="caveat" hidden></p>
           <ul class="legend" aria-label="Legend">
             <li><span class="key key-reviewer"></span>Reviewer</li>
             <li><span class="key key-business"></span>Business</li>
@@ -137,6 +142,10 @@
             <li id="legend-added" hidden><span class="key key-added"></span>Highlighted: added by the latest expansion step</li>
           </ul>
           <div id="graph" class="graph"></div>
+          <details class="more">
+            <summary>How to read the network</summary>
+            <p id="network-note" class="muted"></p>
+          </details>
           <details class="table-view more">
             <summary>View connections as a table</summary>
             <div class="scroll"><table id="links-table"></table></div>
@@ -145,7 +154,7 @@
 
         <div class="rail">
           <section id="demo-expansion" class="card rail-card demo-expansion" aria-labelledby="demo-expansion-title" hidden>
-            <h2 id="demo-expansion-title" tabindex="-1">Expand the investigation</h2>
+            <h2 id="demo-expansion-title" tabindex="-1">Expand the investigation <span class="chip chip-fictional">Fictional data</span></h2>
             <ol id="demo-steps" class="steps steps-compact" aria-label="Expansion steps"></ol>
             <p id="demo-stage" class="stage"></p>
             <div class="row">
@@ -184,7 +193,8 @@
         </section>
 
         <section class="card" aria-labelledby="coverage-title">
-          <h2 id="coverage-title">Coverage: what was and was not collected</h2>
+          <h2 id="coverage-title">Coverage</h2>
+          <p class="muted">What was collected, and what is known to exist but was not.</p>
           <div id="coverage"></div>
         </section>
       </div>

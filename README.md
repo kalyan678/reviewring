@@ -21,7 +21,7 @@ uv sync
 uv run main.py
 ```
 
-Leave that command running. In a browser on the same computer, go to `http://127.0.0.1:8765` It opens on the **Synthetic demo**, which runs fully offline, needs no SerpApi key, and uses no credits. Press **Expand network** to walk through the whole investigation, including expansion and the before-and-after comparison. Use `uv run main.py --port 9000` for another port.
+Leave that command running. In a browser on the same computer, go to `http://127.0.0.1:8765` With no SerpApi key configured it opens on **Explore Demo**, which runs fully offline, needs no SerpApi key, and uses no credits. Press **Expand network** to walk through the whole investigation, including expansion and the before-and-after comparison. Use `uv run main.py --port 9000` for another port.
 
 `127.0.0.1` is your own machine, not a website. The address answers only while `main.py` is running, and only on that computer; opening it anywhere else shows "This site can't be reached".
 
@@ -57,12 +57,12 @@ Then, in the same environment, `python -m unittest discover -s tests` runs the t
 
 ## What you will see
 
-The dashboard has three tabs.
+The dashboard has three tabs. They are independent workspaces, not steps. With a SerpApi key configured the page opens on Investigate; without one it opens on Explore Demo.
 
 | Tab | Data | Needs |
 |---|---|---|
-| **Synthetic demo** | Fictional businesses and reviewers that show a multi-reviewer overlap pattern, with interactive expansion | Nothing. Works on a fresh clone. |
-| **Collected sample** | Every SerpApi response saved on your computer, shown as totals and groups | Saved responses. On a fresh clone it shows "No collected sample on this computer". |
+| **Explore Demo** | Fictional businesses and reviewers that show a multi-reviewer overlap pattern, with interactive expansion | Nothing. Works on a fresh clone. |
+| **Collected Data** | Read-only. Every SerpApi response saved on your computer, shown as totals and groups. It may combine unrelated investigations and is not a single case | Saved responses. On a fresh clone it shows "No collected sample on this computer". |
 | **Investigate** | A live, bounded investigation of a business you search for | Your own SerpApi key |
 
 Each view contains:
@@ -75,7 +75,7 @@ Each view contains:
 
 ### The synthetic demo
 
-Everything in it is invented, and it stays labelled SYNTHETIC throughout. It is an interactive walk through the same steps as a real investigation:
+This is the **Explore Demo** tab. Everything in it is invented, and it stays labelled "Fictional data" throughout. It is an interactive walk through the same steps as a real investigation:
 
 1. **Initial collection.** Thirteen fictional reviewers and seven fictional businesses, from three review pages and eight reviewer histories. Five reviewers share the same four unrelated businesses; two others share a cafe and a grocer. The indicator links both sets on purpose: the second is an everyday overlap, and it shows why a shared-business pattern is a reason to look closer and not proof of anything.
 2. **Expansion is offered.** A panel beside the network shows the steps; "Why expansion is or is not available" names the businesses that qualify under the same rule a real investigation uses.
@@ -165,7 +165,7 @@ Render provides `PORT` itself. Do not add `SERPAPI_API_KEY`: the hosted demo nev
 **Check a deployed URL.**
 
 - `https://<your-service>/api/config` returns `{"hosted_demo": true}`.
-- The page opens directly on the synthetic demo, with no Collected sample or Investigate tab.
+- The page opens directly on Explore Demo, with no Investigate or Collected Data tab.
 - `https://<your-service>/api/view?mode=real` returns an error, not data.
 - `https://<your-service>/api/session` returns "Not found".
 

@@ -470,6 +470,7 @@ class LiveState:
             "max_businesses": 0,
             "performed": len(investigation.expanded_ids),
             "last": None,
+            "comparison": [],
             "findings": [],
             "limits": [],
         }

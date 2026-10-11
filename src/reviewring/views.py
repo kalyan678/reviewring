@@ -806,6 +806,7 @@ def expansion_summary(
     seen_again = len(earlier & {o.reviewer_id for page in pages for o in page.observations})
     count = len(pages)
     reviews = sum(len(page.observations) for page in pages)
+    paged_before = len(build_graph(original).pages)
     again = (
         "None of the reviewers already in this investigation appears"
         if seen_again == 0
@@ -814,6 +815,18 @@ def expansion_summary(
         else f"{seen_again} of the reviewers already in this investigation appear"
     )
     return {
+        # The same figures the sentences below state, as numbers for a compact table.
+        "comparison": [
+            {"key": "reviewers", "label": "Reviewers", "before": before.reviewers, "after": after.reviewers},
+            {"key": "edges", "label": "Reviewer-business links", "before": before.edges, "after": after.edges},
+            {
+                "key": "pairs",
+                "label": f"Pairs sharing {MIN_SHARED_BUSINESSES} or more businesses",
+                "before": before.reviewer_pairs_sharing_two_or_more,
+                "after": after.reviewer_pairs_sharing_two_or_more,
+            },
+            {"key": "pages", "label": "Businesses with a review page", "before": paged_before, "after": paged_before + count},
+        ],
         "findings": [
             f"{count} shared business{'' if count == 1 else 'es'} {'was' if count == 1 else 'were'} expanded, "
             f"each by its first review page: {reviews} review{'' if reviews == 1 else 's'} collected.",
@@ -894,6 +907,6 @@ def synthetic_view(expansions: int = 0) -> dict[str, Any]:
         "statement": statement,
         # Nodes that the latest step added or turned into a collected page.
         "new_nodes": sorted((graph.reviewer_ids - previous.reviewer_ids) | {p.page.business_id for p in steps[-1]}) if steps else [],
-        **(expansion_summary(original, pages, exact=True) if pages else {"findings": [], "limits": []}),
+        **(expansion_summary(original, pages, exact=True) if pages else {"comparison": [], "findings": [], "limits": []}),
     }
     return view

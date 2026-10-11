@@ -252,7 +252,7 @@ The synthetic demo can be expanded step by step so the whole journey can be seen
 | `GET /api/config` | `{"hosted_demo": true}` |
 | `GET /api/view?mode=synthetic[&expansions=N]` | The fictional view; any other mode, parameter, repeated parameter or malformed query is 400 |
 | Any other path | 404 |
-| `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | 405; the body is not read |
+| `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS` | 405; a small body is discarded unread by the application, a large one closes the connection |
 
 - The module that holds live state (`reviewring.live`) and the SerpApi client are imported only when a local server is created. A test starts the hosted server in an interpreter where those modules and all third-party packages are blocked from importing.
 - No `LiveState`, session token, plan, or investigation exists in this mode, so there is no shared mutable state and nothing to spend.

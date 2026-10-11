@@ -21,7 +21,7 @@ uv sync
 uv run main.py
 ```
 
-Leave that command running. In a browser on the same computer, go to `http://127.0.0.1:8765` and choose **Synthetic demo**. It runs fully offline, needs no SerpApi key, and uses no credits. Press **Expand (fictional data, no request)** to walk through the whole investigation, including expansion and the before-and-after comparison. Use `uv run main.py --port 9000` for another port.
+Leave that command running. In a browser on the same computer, go to `http://127.0.0.1:8765` It opens on the **Synthetic demo**, which runs fully offline, needs no SerpApi key, and uses no credits. Press **Expand network** to walk through the whole investigation, including expansion and the before-and-after comparison. Use `uv run main.py --port 9000` for another port.
 
 `127.0.0.1` is your own machine, not a website. The address answers only while `main.py` is running, and only on that computer; opening it anywhere else shows "This site can't be reached".
 
@@ -78,8 +78,8 @@ Each view contains:
 Everything in it is invented, and it stays labelled SYNTHETIC throughout. It is an interactive walk through the same steps as a real investigation:
 
 1. **Initial collection.** Thirteen fictional reviewers and seven fictional businesses, from three review pages and eight reviewer histories. Five reviewers share the same four unrelated businesses; two others share a cafe and a grocer. The indicator links both sets on purpose: the second is an everyday overlap, and it shows why a shared-business pattern is a reason to look closer and not proof of anything.
-2. **Expansion is offered.** A card under the summary names the businesses that qualify under the same rule a real investigation uses, and says why.
-3. **Press Expand.** The first step adds the fictional first review page of two shared businesses. Four reviewers not seen before appear, two of them on both pages, so the larger group grows from five reviewers to seven and overlapping pairs go from 11 to 20. Added nodes get a thick outline.
+2. **Expansion is offered.** A panel beside the network shows the steps; "Why expansion is or is not available" names the businesses that qualify under the same rule a real investigation uses.
+3. **Press Expand.** The first step adds the fictional first review page of two shared businesses. Four reviewers not seen before appear, two of them on both pages, so the larger group grows from five reviewers to seven and overlapping pairs go from 11 to 20. Added nodes are highlighted, and a before-and-after table appears beside the graph.
 4. **Press Expand again.** The second step adds the grocer's page. It adds one reviewer and no overlapping pair: the everyday pair is still just a pair. After that nothing qualifies and the page says why.
 5. **Compare.** "What expansion added" states the before-and-after figures, and "What this does not show" states that the counts rose because more was collected, not because anyone behaved differently.
 

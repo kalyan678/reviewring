@@ -222,7 +222,8 @@ class StaticPageTests(unittest.TestCase):
 
     def test_synthetic_demo_has_an_explicit_expansion_action(self):
         html, script = self.sources["index.html"], self.sources["app.js"]
-        self.assertIn('id="demo-expand" class="primary">Expand (fictional data, no request)</button>', html)
+        self.assertIn('id="demo-expand" class="primary">Expand network</button>', html)
+        self.assertIn("Fictional data. No request is sent and no credit is used.", html)
         self.assertIn('id="demo-reset"', html)
         self.assertIn("/api/view?mode=synthetic&expansions=${steps}", script)
         # Shown for the synthetic view only, and it never posts or spends anything.

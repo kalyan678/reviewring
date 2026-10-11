@@ -39,7 +39,7 @@ function plural(count, noun, pluralNoun = `${noun}s`) {
 function modeFromHash() {
   if (hosted) return "synthetic"; // the public demo has no other mode
   const mode = location.hash.slice(1);
-  return MODES.includes(mode) ? mode : "real";
+  return MODES.includes(mode) ? mode : "synthetic"; // the demo needs nothing, so it is the starting point
 }
 
 // The one place the page talks to the server. Paths are always same-origin.
@@ -97,17 +97,17 @@ function showBanner(mode) {
   if (mode === "investigate") {
     replace(
       banner,
-      el("strong", {}, "Live investigation. "),
+      el("strong", {}, "Live investigation"),
       document.createTextNode(
-        "Collects real data through SerpApi and uses your credits, only after you confirm each step. Results are shown as totals and groups: no reviewer is named."
+        " Collects real data through SerpApi and uses your credits, only after you confirm each step. Results are shown as totals and groups: no reviewer is named."
       )
     );
   } else if (mode === "synthetic") {
     replace(
       banner,
-      el("strong", {}, "SYNTHETIC DEMO. "),
+      el("strong", {}, "SYNTHETIC DEMO"),
       document.createTextNode(
-        "Every business, reviewer, and rating below is fictional and was invented to illustrate an overlap pattern. Nothing here describes a real business or person."
+        " Every business, reviewer and rating here is fictional, invented to show what an overlap pattern looks like. Nothing describes a real business or person."
       ),
       hosted
         ? el("span", { class: "hosted-note" }, " This public demo serves only this fictional walkthrough. Investigating real businesses through SerpApi is switched off here; it runs on your own computer with your own key.")
@@ -116,9 +116,9 @@ function showBanner(mode) {
   } else {
     replace(
       banner,
-      el("strong", {}, "Collected sample. "),
+      el("strong", {}, "Collected sample"),
       document.createTextNode(
-        "Combines every SerpApi Google Maps response saved on this computer, from all searches and investigations, which may be unrelated. Shown as totals and groups only: no reviewer or business is named."
+        " Combines every SerpApi Google Maps response saved on this computer, from all searches and investigations, which may be unrelated. Shown as totals and groups only: no reviewer or business is named."
       )
     );
   }
@@ -161,13 +161,24 @@ function renderDemoExpansion(view) {
   $("demo-expansion").hidden = !expansion;
   $("legend-added").hidden = !(expansion && expansion.new_nodes.length);
   if (!expansion) return;
-  $("demo-expansion-title").textContent = expansion.steps
-    ? "Expansion: what collecting more showed"
-    : "Next step: expand to shared businesses";
+  const stages = ["Initial collection"];
+  for (let step = 1; step <= expansion.steps; step += 1) stages.push(`Expansion ${step}`);
+  if (expansion.available) stages.push(`Expansion ${expansion.steps + 1}`);
+  replace(
+    $("demo-steps"),
+    ...stages.map((label, index) => {
+      const item = el("li", {}, label);
+      if (index < expansion.steps) item.className = "done";
+      else if (index === expansion.steps) { item.className = "current"; item.setAttribute("aria-current", "step"); }
+      return item;
+    })
+  );
   $("demo-stage").textContent = expansion.steps
-    ? `After ${plural(expansion.steps, "expansion step")}: ${plural(expansion.performed, "shared business", "shared businesses")} expanded. Nodes with a thick outline below were added by the latest step.`
-    : "Initial collection: three review pages and eight reviewer histories. Nothing has been expanded yet.";
+    ? `${plural(expansion.performed, "shared business", "shared businesses")} expanded so far. Nodes added by the latest step are highlighted in the network.`
+    : "Initial collection: three review pages and eight reviewer histories. Expanding collects the review page of a business two overlapping reviewers share, to see who else reviewed it.";
+  if (!expansion.available) $("demo-stage").textContent += " No further business qualifies, so expansion stops here.";
   $("demo-statement").textContent = expansion.statement;
+  replace($("demo-compare"), expansion.comparison.length ? comparisonTable(expansion.comparison) : null);
   $("demo-expand").hidden = !expansion.available;
   $("demo-expand").disabled = false;
   $("demo-reset").hidden = !expansion.steps;
@@ -202,14 +213,59 @@ function renderTiles(view) {
     [m.edges, "reviewer-business links"],
     [m.pairs_sharing_two, `reviewer pairs sharing ${minimum}+ businesses`, true],
   ];
+  // After an expansion of the demo, each figure also shows how it changed.
+  const compared = new Map(((view.synthetic && view.expansion && view.expansion.comparison) || []).map((row) => [row.key, row]));
+  const keys = ["reviewers", null, "edges", "pairs"];
   replace(
     $("tiles"),
-    ...tiles.map(([value, label, hero]) => {
+    ...tiles.map(([value, label, hero], index) => {
       const tile = el("div", { class: hero ? "tile hero" : "tile" });
-      tile.append(el("div", { class: "value" }, String(value)), el("div", { class: "label" }, label));
+      tile.append(el("span", { class: "value" }, String(value)));
+      const row = compared.get(keys[index]);
+      if (row) {
+        const change = row.after - row.before;
+        const delta = el("span", { class: change ? "delta" : "delta none" }, change ? signed(change) : "0");
+        delta.setAttribute("title", "Change since the initial collection");
+        delta.setAttribute("aria-label", `${signed(change)} since the initial collection`);
+        tile.append(delta);
+      }
+      tile.append(el("div", { class: "label" }, label));
       return tile;
     })
   );
+}
+
+function signed(change) {
+  return change > 0 ? `+${change}` : change < 0 ? `\u2212${-change}` : "No change";
+}
+
+// A closed-by-default row for detail that supports a figure but need not be read first.
+function disclosure(summary, ...children) {
+  const details = el("details", { class: "more" });
+  details.append(el("summary", {}, summary), ...children.filter(Boolean));
+  return details;
+}
+
+// Before and after an expansion, from the figures the server reports.
+function comparisonTable(comparison) {
+  const table = el("table", { class: "compare" });
+  const head = el("tr");
+  for (const [label, cls] of [["", ""], ["Before", "num"], ["After", "num"], ["Change", "num"]]) {
+    head.append(el("th", cls ? { class: cls, scope: "col" } : { scope: "col" }, label));
+  }
+  table.append(head);
+  for (const row of comparison) {
+    const line = el("tr");
+    const change = row.after - row.before;
+    line.append(
+      el("td", {}, row.label),
+      el("td", { class: "num" }, String(row.before)),
+      el("td", { class: "num after" }, String(row.after)),
+      el("td", { class: change ? "num change" : "num change none" }, signed(change))
+    );
+    table.append(line);
+  }
+  return table;
 }
 
 function meter(label, value, total, note) {
@@ -228,7 +284,7 @@ function meter(label, value, total, note) {
 function renderCoverage(view) {
   const c = view.coverage;
   const parts = [
-    el("p", { class: "muted" }, "Solid bar: collected. Empty track: known to exist but not collected."),
+    el("p", { class: "muted" }, "Filled bar: collected. Empty track: known to exist but not collected."),
     el("h3", {}, "Reviews collected per business"),
   ];
   for (const row of c.business_rows) {
@@ -251,10 +307,10 @@ function renderCoverage(view) {
       c.reviewers,
       "Without a history, only the business a reviewer was found on is known."
     ),
-    el("p", { class: "muted" }, c.history_windows.statement),
+    disclosure("How complete the retrieved histories are", el("p", { class: "muted" }, c.history_windows.statement)),
     el(
       "p",
-      { class: "callout" },
+      { class: "caveat" },
       `${plural(c.history_only_businesses, "business", "businesses")} ${c.history_only_businesses === 1 ? "appears" : "appear"} only in a reviewer history, with no review page collected. Their other reviewers are unknown, not absent.`
     )
   );
@@ -263,19 +319,21 @@ function renderCoverage(view) {
 
 function renderIndicators(view) {
   const ind = view.indicators;
-  const parts = [
+  const rule = disclosure(
+    "The rule behind this",
     el(
       "p",
       { class: "muted" },
-      `Rule: two reviewers are linked when both reviewed at least ${ind.minimum_shared_businesses} of the same businesses. Linked reviewers form a group. The number ${ind.minimum_shared_businesses} is a starting point for exploration, not a validated threshold.`
-    ),
-  ];
+      `Two reviewers are linked when both reviewed at least ${ind.minimum_shared_businesses} of the same businesses. Linked reviewers form a group. The number ${ind.minimum_shared_businesses} is a starting point for exploration, not a validated threshold.`
+    )
+  );
+  const parts = [];
   const list = (items) => {
     const ul = el("ul", { class: "points" });
     for (const item of items) ul.append(el("li", {}, item));
     return ul;
   };
-  if (!ind.group_count) parts.push(el("p", { class: "headline" }, ind.evidence.assessed ? "No group found." : "Overlap not assessed."));
+  if (!ind.group_count) parts.push(el("p", { class: "verdict" }, ind.evidence.assessed ? "No group found." : "Overlap not assessed."));
   parts.push(
     el("h3", {}, "What was observed"),
     list(ind.evidence.observed_statements),
@@ -306,9 +364,10 @@ function renderIndicators(view) {
   parts.push(
     el(
       "p",
-      { class: "callout" },
+      { class: "caveat" },
       "A group is a pattern to look into, not a conclusion. People share businesses for ordinary reasons, and this indicator cannot tell those apart from arranged reviews. It is not a probability and not evidence of fraud."
-    )
+    ),
+    rule
   );
   replace($("indicators"), ...parts);
 }
@@ -362,7 +421,7 @@ function renderRatings(view) {
       el("p", { class: "muted" }, "Google's rating covers every review of the business. The collected reviews are a small, unrepresentative slice, so no average is computed from them.")
     );
   }
-  parts.push(el("h3", {}, "Coordination-adjusted rating"), el("p", { class: "callout" }, r.adjusted_rating.reason));
+  parts.push(disclosure("Why there is no adjusted rating", el("p", { class: "muted" }, r.adjusted_rating.reason)));
   replace($("ratings"), ...parts);
 }
 
@@ -417,12 +476,12 @@ function applySelection() {
   $("clear").hidden = !(selection && selection.pinned);
   const detail = $("detail");
   if (!selection) {
-    replace(detail, el("h3", {}, "Nothing selected"), el("p", { class: "muted" }, "Point at, tap, or tab to a node to see what it is connected to and what was not collected."));
+    replace(detail, el("h3", {}, "Selection"), el("p", { class: "title" }, "Nothing selected"), el("p", { class: "muted" }, "Point at, tap, or tab to a node to see what it is connected to and what was not collected."));
     return;
   }
   const lines = el("ul");
   for (const line of selection.lines) lines.append(el("li", {}, line));
-  const parts = [el("h3", {}, selection.title), lines];
+  const parts = [el("h3", {}, "Selection"), el("p", { class: "title" }, selection.title), lines];
   if (selection.connections && selection.connections.length) {
     const list = el("ul", { class: "connections" });
     for (const item of selection.connections) list.append(el("li", {}, item));
@@ -485,6 +544,7 @@ function renderNetwork(view) {
     const group = svg("g", { class: `node ${node.kind}${added ? " added" : ""}`, tabindex: "0", role: "button", "aria-label": `${node.label}. ${node.detail.join(" ")}` });
     group.dataset.id = node.id;
     group.append(svg("rect", { class: "hit", x: String(x - 22), y: String(y - ROW_HEIGHT / 2), width: "44", height: String(ROW_HEIGHT) }));
+    if (added) group.append(svg("circle", { class: "halo", cx: String(x), cy: String(y), r: String(r + 11) }));
     if (node.group) group.append(svg("circle", { class: "ring", cx: String(x), cy: String(y), r: String(r + 5) }));
     if (node.incomplete) group.append(svg("circle", { class: "outline", cx: String(x), cy: String(y), r: String(r + (node.group ? 9 : 4)) }));
     group.append(
@@ -558,17 +618,33 @@ function setBusy(value) {
   for (const control of $("investigate").querySelectorAll("button, input")) control.disabled = value;
 }
 
+// Which of the four steps the panel is at, from what it is currently showing.
+function syncSteps() {
+  const at = !$("live-summary").hidden ? 4 : !$("confirm").hidden ? 3 : !$("results-form").hidden ? 2 : 1;
+  for (const item of $("steps").children) {
+    const step = Number(item.dataset.step);
+    item.className = step < at ? "done" : step === at ? "current" : "";
+    if (step === at) item.setAttribute("aria-current", "step");
+    else item.removeAttribute("aria-current");
+  }
+}
+
 function askConfirm(plan, run) {
   pending = run;
+  $("confirm-cost").textContent = plan.max_requests === 0
+    ? "No new request \u00b7 0 credits"
+    : `At most ${plural(plan.max_requests, "new SerpApi request")} \u00b7 ${plural(plan.max_requests, "credit")}`;
   $("confirm-text").textContent = plan.business ? `${plan.business}: ${plan.statement}` : plan.statement;
   $("confirm-yes").textContent = plan.max_requests === 0 ? "Continue (no request sent)" : "Confirm and send";
   $("confirm").hidden = false;
   focusNext = $("confirm-yes");
+  syncSteps();
 }
 
 function closeConfirm() {
   pending = null;
   $("confirm").hidden = true;
+  syncSteps();
 }
 
 async function guarded(action) {
@@ -606,6 +682,7 @@ async function openInvestigate() {
     $("history-limit").value = String(session.default_history_limit);
     $("history-limit-label").textContent = `Entries to request per history (${session.min_history_limit} to ${session.max_history_limit})`;
   }
+  syncSteps();
   if (investigationView && modeFromHash() === "investigate") show(investigationView);
 }
 
@@ -629,6 +706,7 @@ function showResults(businesses) {
   $("results-form").hidden = false;
   $("results-form").querySelector('button[type="submit"]').hidden = !items.length;
   if (items.length) focusNext = items[0].querySelector("input");
+  syncSteps();
 }
 
 function progressText(status) {
@@ -650,6 +728,7 @@ function renderExpansion(expansion) {
     $("expansion-count-label").textContent = `Shared businesses to expand (1 to ${expansion.max_businesses})`;
   }
   $("expansion-result").hidden = !expansion.findings.length;
+  replace($("expansion-compare"), expansion.comparison.length ? comparisonTable(expansion.comparison) : null);
   replace($("expansion-findings"), ...expansion.findings.map((line) => el("li", {}, line)));
   replace($("expansion-limits"), ...expansion.limits.map((line) => el("li", {}, line)));
 }
@@ -678,6 +757,7 @@ function finishInvestigation(status) {
   }
   replace($("live-summary"), ...lines.map((line) => el("p", {}, line)));
   $("live-summary").hidden = false;
+  syncSteps();
   renderExpansion(status.expansion);
   if (status.view) {
     investigationView = status.view;
@@ -721,6 +801,7 @@ $("results-form").addEventListener("submit", (event) => {
       $("live-summary").hidden = true;
       $("dashboard").hidden = true;
       $("expansion").hidden = true;
+      syncSteps();
       const started = await post("/api/investigations", { plan: plan.plan });
       investigationId = started.investigation;
       $("progress").textContent = "Collecting: starting.";

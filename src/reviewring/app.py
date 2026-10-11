@@ -100,6 +100,18 @@ class _Responder(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self._send(status, body, "application/json; charset=utf-8")
 
+    def _read_body(self) -> bytes | None:
+        """Read the request body up front, so a rejected request is still
+        fully consumed and the client gets the response, not a reset."""
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            length = -1
+        if not 0 <= length <= MAX_DRAIN_BYTES:
+            self.close_connection = True
+            return None
+        return self.rfile.read(length)
+
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         # Quiet by default; nothing about requests or data is logged.
         return
@@ -149,7 +161,9 @@ class _HostedHandler(_Responder):
             self._send_json(500, {"error": "The request could not be completed."})
 
     def _refuse(self) -> None:
-        # No request body is ever read here; the connection is closed instead.
+        # A small body is read and discarded so the client receives this answer
+        # and not a connection reset. Nothing in it is parsed or kept.
+        self._read_body()
         self.close_connection = True
         self._send_json(405, {"error": HOSTED_ONLY})
 
@@ -179,18 +193,6 @@ def make_handler(raw_dir: Path, live: LiveState) -> type[BaseHTTPRequestHandler]
             supplied = self.headers.get(TOKEN_HEADER, "")
             if not hmac.compare_digest(supplied.encode("utf-8"), live.token.encode("utf-8")):
                 raise _Rejected(403, "Request not accepted. Reload the page.")
-
-        def _read_body(self) -> bytes | None:
-            """Read the request body up front, so a rejected request is still
-            fully consumed and the client gets the response, not a reset."""
-            try:
-                length = int(self.headers.get("Content-Length", ""))
-            except ValueError:
-                length = -1
-            if not 0 <= length <= MAX_DRAIN_BYTES:
-                self.close_connection = True
-                return None
-            return self.rfile.read(length)
 
         def _json_body(self, raw: bytes | None) -> dict:
             if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json":

@@ -248,7 +248,8 @@ class StaticPageTests(unittest.TestCase):
     def test_synthetic_demo_has_an_explicit_expansion_action(self):
         html, script = self.sources["index.html"], self.sources["app.js"]
         self.assertIn('id="demo-expand" class="primary">Expand network</button>', html)
-        self.assertIn("Fictional data. No request is sent and no credit is used.", html)
+        # The one fictional-data indicator covers this card; it carries no second badge or credit note.
+        self.assertNotIn("Fictional data", html)
         self.assertIn('id="demo-reset"', html)
         self.assertIn("/api/view?mode=synthetic&expansions=${steps}", script)
         # Shown for the synthetic view only, and it never posts or spends anything.
@@ -263,7 +264,7 @@ class StaticPageTests(unittest.TestCase):
         html = self.sources["index.html"]
         # One indicator, not one per card; it stays in view while the demo scrolls.
         self.assertNotIn("chip-fictional", html + script + css)
-        self.assertEqual(html.count("Fictional data"), 1)  # the caption under the Expand button
+        self.assertEqual(html.count("Fictional data"), 0)
         strip = css[css.index(".banner.synthetic {"):css.index("}", css.index(".banner.synthetic {"))]
         self.assertIn("position: sticky;", strip)
         self.assertIn("top: 0;", strip)
@@ -323,6 +324,73 @@ class StaticPageTests(unittest.TestCase):
         # The first load of the demo is checked the same way, and a failed load hides the half-drawn view.
         self.assertIn('if (mode === "synthetic" && !usableDemoView(view)) return showState("This page and the server do not match", VERSION_MISMATCH);', script)
         self.assertIn('$("dashboard").hidden = true; // never leave a half-drawn view on screen', script)
+
+    def test_overlap_panel_leads_with_figures_and_groups_and_tucks_method_away(self):
+        script = self.sources["app.js"]
+        panel = script[script.index("function renderIndicators(view) {"):script.index("function ratingRows")]
+        # Figures, then group cards, then one reminder, then the method behind a disclosure.
+        order = [panel.index(marker) for marker in ('class: "facts"', 'class: "groups"', 'class: "caveat"', '"Method and limits"')]
+        self.assertEqual(order, sorted(order))
+        method = panel[panel.index('"Method and limits"'):]
+        for inside in ("What was observed", "What this does not show", "not a validated threshold", "ind.evidence.limit_statements"):
+            self.assertIn(inside, method)
+        # Every figure is one the server sent; a withheld one is shown as withheld, never recomputed.
+        for value in ("evidence.pairs", "evidence.reviewers_involved", "ind.group_count", "evidence.businesses_shared", "evidence.strongest_pair"):
+            self.assertIn(value, panel)
+        self.assertIn('evidence.detail_withheld ? withheld : evidence.reviewers_involved', panel)
+        self.assertIn('evidence.detail_withheld ? withheld : ind.group_count', panel)
+        self.assertIn("not evidence of fraud or of any arrangement", panel)
+        self.assertIn("Only collected data was compared: review histories for", panel)
+
+    def test_coverage_never_calls_a_full_bar_complete(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        self.assertIn("A full bar covers one business's reported reviews, not the whole investigation.", html)
+        panel = script[script.index("function renderCoverage(view) {"):script.index("function fact(")]
+        for status in ('"Total withheld"', '"Total not reported"', '"Partial"', '"Reported total reached"'):
+            self.assertIn(status, panel)
+        for wrong in ("Complete", "complete coverage", "Fully collected", "All reviews"):
+            self.assertNotIn(wrong, panel)
+        self.assertIn("A token for a further page was provided and not used.", panel)
+        self.assertIn("How complete the retrieved histories are", panel)
+
+    def test_ratings_keep_googles_figure_apart_from_the_collected_sample(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        self.assertIn("Business ratings vs. collected reviews", html)
+        self.assertIn("a small, unrepresentative sample, so no average is computed from them", html)
+        panel = script[script.index("function renderRatings(view) {"):script.index("// ---------- network ----------")]
+        self.assertIn('"Google\'s rating"', panel)
+        self.assertIn("Why there is no adjusted rating", panel)
+        for invented in ("average", "adjusted_rating.value", "score", "suspicio"):
+            self.assertNotIn(invented, panel)
+
+    def test_expansion_panels_explain_in_one_line_and_keep_the_rule_a_click_away(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        self.assertNotIn("Why expansion is or is not available", html + script)
+        for heading in ("this business qualifies", "these businesses qualify", "Why expansion stops here", "Why expansion is not available"):
+            self.assertIn(heading, script)
+        # Demo names come from the server; the real panel never names a business.
+        self.assertIn("expansion.next_businesses", script)
+        real = script[script.index("function renderExpansion(expansion) {"):script.index("function finishInvestigation")]
+        self.assertNotIn("next_businesses", real)
+        self.assertIn("The server chooses them and does not name them. You confirm the exact cost before anything is sent.", real)
+        self.assertIn('id="expansion-statement"', html)
+        self.assertIn('id="demo-statement"', html)
+
+    def test_missing_key_state_points_to_the_demo_and_to_setup(self):
+        html, script = self.sources["index.html"], self.sources["app.js"]
+        notice = html[html.index('id="key-missing"'):html.index('<form id="search-form"')]
+        for needed in (
+            "Real investigations need a SerpApi key on this computer",
+            "You do not need a key to explore the fictional demo.",
+            'id="key-demo" class="primary">Explore Demo</button>',
+            "README.md", "SERPAPI_API_KEY", ".env",
+            "A hosted public copy of ReviewRing is the fictional demo only",
+            "never sent to the browser",
+        ):
+            self.assertIn(needed, notice)
+        # No way to type a key into the page.
+        self.assertNotRegex(html, r'type="password"|name="api|id="api')
+        self.assertIn('$("key-demo").addEventListener("click", () => { location.hash = "synthetic"; });', script)
 
     def test_group_focus_exists_only_for_groups_the_server_described(self):
         script = self.sources["app.js"]

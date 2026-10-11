@@ -184,6 +184,14 @@ function renderDemoExpansion(view) {
     : "Initial collection: three review pages and eight reviewer histories. Expanding collects the review page of a business two overlapping reviewers share, to see who else reviewed it.";
   if (!expansion.available) $("demo-stage").textContent += " No further business qualifies, so expansion stops here.";
   $("demo-statement").textContent = expansion.statement;
+  // One short line in the workflow; the rule and the cost in real use stay one click away.
+  const next = expansion.next_businesses || [];
+  $("demo-next").textContent = expansion.available
+    ? `Next: the review ${next.length === 1 ? "page" : "pages"} of ${next.join(" and ")}. Two overlapping reviewers both list ${next.length === 1 ? "it" : "them"}, and ${next.length === 1 ? "its page has" : "their pages have"} not been collected.`
+    : "Nothing further to expand.";
+  $("demo-why").textContent = expansion.available
+    ? `Why ${next.length === 1 ? "this business qualifies" : "these businesses qualify"}`
+    : expansion.steps ? "Why expansion stops here" : "Why expansion is not available";
   replace($("demo-compare"), expansion.comparison.length ? comparisonTable(expansion.comparison) : null);
   // What the latest step itself added, from the nodes and links the server marks as new.
   $("demo-update").hidden = !expansion.steps;
@@ -318,10 +326,12 @@ function comparisonTable(comparison) {
   return table;
 }
 
-function meter(label, value, total, note) {
+function meter(label, value, total, note, status) {
   const wrap = el("div", { class: "meter" });
   const head = el("div", { class: "meter-label" });
-  head.append(el("span", {}, label), el("span", {}, total === null ? `${value} collected` : `${value} of ${total}`));
+  const name = el("span", {}, label);
+  if (status) name.append(el("span", { class: "status" }, status));
+  head.append(name, el("span", {}, total === null ? `${value} collected` : `${value} of ${total}`));
   const bar = el("div", { class: "bar", role: "img", "aria-label": total === null ? `${value} collected, total unknown` : `${value} of ${total}` });
   const fill = el("div");
   fill.style.width = total ? `${Math.min(100, (100 * value) / total)}%` : "0%";
@@ -333,65 +343,73 @@ function meter(label, value, total, note) {
 
 function renderCoverage(view) {
   const c = view.coverage;
-  const parts = [
-    el("p", { class: "muted" }, "Filled bar: collected. Empty track: known to exist but not collected."),
-    el("h3", {}, "Reviews collected per business"),
-  ];
+  const parts = [el("h3", {}, "Reviews collected per business")];
   for (const row of c.business_rows) {
-    let note = `${plural(row.pages, "review page")} collected.`;
-    if (row.not_collected) note += ` ${row.not_collected} reported reviews not collected.`;
-    if (row.further_pages) note += " A token for a further page was provided and not used.";
-    if (row.expanded) {
-      note = "Collected by expansion: first review page only.";
-      if (row.withheld) note += " Its reported total is withheld.";
-      else if (row.not_collected) note += ` ${row.not_collected} reported reviews not collected.`;
-    }
-    parts.push(meter(row.label, row.captured, row.reported_total, note));
+    // What is known to be missing comes first; a reached total is stated as that and no more.
+    const status = row.withheld ? "Total withheld"
+      : row.reported_total === null ? "Total not reported"
+      : row.not_collected || row.further_pages ? "Partial"
+      : "Reported total reached";
+    const notes = [];
+    if (row.expanded) notes.push("Collected by expansion: first review page only.");
+    else notes.push(`${plural(row.pages, "review page")} collected.`);
+    if (row.withheld) notes.push("Its reported total is withheld.");
+    else if (row.not_collected) notes.push(`${row.not_collected} reported reviews not collected.`);
+    if (row.further_pages && !row.expanded) notes.push("A token for a further page was provided and not used.");
+    parts.push(meter(row.label, row.captured, row.reported_total, notes.join(" "), status));
   }
   if (c.page_statement) parts.push(el("p", { class: "muted" }, c.page_statement));
   parts.push(
     el("h3", {}, "Reviewer histories collected"),
     meter(
-      "Reviewers with their review history collected",
+      "Reviewers with a collected history",
       c.reviewers_with_history,
       c.reviewers,
       "Without a history, only the business a reviewer was found on is known."
     ),
-    disclosure("How complete the retrieved histories are", el("p", { class: "muted" }, c.history_windows.statement)),
     el(
       "p",
       { class: "caveat" },
       `${plural(c.history_only_businesses, "business", "businesses")} ${c.history_only_businesses === 1 ? "appears" : "appear"} only in a reviewer history, with no review page collected. Their other reviewers are unknown, not absent.`
-    )
+    ),
+    disclosure("How complete the retrieved histories are", el("p", { class: "muted" }, c.history_windows.statement))
   );
   replace($("coverage"), ...parts);
 }
 
+function fact(value, label) {
+  const item = el("div", { class: "fact" });
+  item.append(el("dd", typeof value === "number" ? {} : { class: "words" }, String(value)), el("dt", {}, label));
+  return item;
+}
+
 function renderIndicators(view) {
   const ind = view.indicators;
-  const rule = disclosure(
-    "The rule behind this",
-    el(
-      "p",
-      { class: "muted" },
-      `Two reviewers are linked when both reviewed at least ${ind.minimum_shared_businesses} of the same businesses. Linked reviewers form a group. The number ${ind.minimum_shared_businesses} is a starting point for exploration, not a validated threshold.`
-    )
-  );
-  const parts = [];
+  const evidence = ind.evidence;
   const list = (items) => {
     const ul = el("ul", { class: "points" });
     for (const item of items) ul.append(el("li", {}, item));
     return ul;
   };
+  const parts = [];
   if (!ind.group_count) parts.push(el("p", { class: "verdict" }, ind.evidence.assessed ? "No group found." : "Overlap not assessed."));
-  parts.push(
-    el("h3", {}, "What was observed"),
-    list(ind.evidence.observed_statements),
-    el("h3", {}, "What this does not show"),
-    list(ind.evidence.limit_statements)
-  );
+  if (evidence.observed) {
+    // The server's own figures. Where it withholds one for a small group, the page says so and shows nothing in its place.
+    const withheld = "Withheld";
+    const facts = el("dl", { class: "facts" });
+    facts.append(
+      fact(evidence.pairs, `reviewer ${evidence.pairs === 1 ? "pair" : "pairs"} sharing ${ind.minimum_shared_businesses}+ businesses`),
+      fact(evidence.detail_withheld ? withheld : evidence.reviewers_involved, "reviewers involved"),
+      fact(evidence.detail_withheld ? withheld : ind.group_count, ind.group_count === 1 ? "group" : "groups"),
+      fact(evidence.businesses_shared, "businesses shared"),
+      fact(evidence.strongest_pair, "most shared by one pair")
+    );
+    parts.push(facts);
+  } else {
+    parts.push(list(evidence.observed_statements));
+  }
   if (ind.groups.length) {
-    const list = el("div", { class: "groups" });
+    const cards = el("div", { class: "groups" });
     for (const group of ind.groups) {
       const card = el("div", { class: "group" });
       card.append(
@@ -407,17 +425,34 @@ function renderIndicators(view) {
         });
         card.append(button);
       }
-      list.append(card);
+      cards.append(card);
     }
-    parts.push(list);
+    parts.push(cards);
   }
+  const c = view.coverage;
   parts.push(
     el(
       "p",
       { class: "caveat" },
-      "A group is a pattern to look into, not a conclusion. People share businesses for ordinary reasons, and this indicator cannot tell those apart from arranged reviews. It is not a probability and not evidence of fraud."
+      `Shared businesses are a pattern to look into, not evidence of fraud or of any arrangement. Only collected data was compared: review histories for ${c.reviewers_with_history} of ${plural(c.reviewers, "reviewer")}.`
     ),
-    rule
+    disclosure(
+      "Method and limits",
+      el(
+        "p",
+        { class: "muted" },
+        `Two reviewers are linked when both reviewed at least ${ind.minimum_shared_businesses} of the same businesses. Linked reviewers form a group. The number ${ind.minimum_shared_businesses} is a starting point for exploration, not a validated threshold.`
+      ),
+      el("h3", {}, "What was observed"),
+      list(ind.evidence.observed_statements),
+      el("h3", {}, "What this does not show"),
+      list(ind.evidence.limit_statements),
+      el(
+        "p",
+        { class: "muted" },
+        "A group is a pattern to look into, not a conclusion. People share businesses for ordinary reasons, and this indicator cannot tell those apart from arranged reviews. It is not a probability and not evidence of fraud."
+      )
+    )
   );
   replace($("indicators"), ...parts);
 }
@@ -439,7 +474,7 @@ function ratingRows(distribution, total) {
 function renderRatings(view) {
   const r = view.ratings;
   const parts = [
-    el("h3", {}, `Ratings of the ${plural(r.reviews_with_rating, "collected review")}`),
+    el("h3", {}, `Ratings in the ${plural(r.reviews_with_rating, "collected review")}`),
     ratingRows(r.distribution, r.reviews_with_rating || 1),
   ];
   if (r.reviews_without_usable_rating) {
@@ -448,7 +483,7 @@ function renderRatings(view) {
   if (r.businesses.length) {
     const table = el("table");
     const head = el("tr");
-    for (const [label, cls] of [["Business", ""], ["Rating reported by Google", "num"], ["Reviews reported", "num"], ["Reviews collected", "num"], ["Ratings in collected reviews", ""]]) {
+    for (const [label, cls] of [["Business", ""], ["Google's rating", "num"], ["Reviews reported", "num"], ["Reviews collected", "num"], ["Ratings in collected reviews", ""]]) {
       head.append(el("th", cls ? { class: cls, scope: "col" } : { scope: "col" }, label));
     }
     table.append(head);
@@ -465,11 +500,7 @@ function renderRatings(view) {
     }
     const scroll = el("div", { class: "scroll" });
     scroll.append(table);
-    parts.push(
-      el("h3", {}, "Google's rating and the collected reviews are different things"),
-      scroll,
-      el("p", { class: "muted" }, "Google's rating covers every review of the business. The collected reviews are a small, unrepresentative slice, so no average is computed from them.")
-    );
+    parts.push(el("h3", {}, "Per business"), scroll);
   }
   parts.push(disclosure("Why there is no adjusted rating", el("p", { class: "muted" }, r.adjusted_rating.reason)));
   replace($("ratings"), ...parts);
@@ -842,6 +873,11 @@ function renderExpansion(expansion) {
   $("expansion").hidden = !expansion;
   if (!expansion) return;
   $("expansion-statement").textContent = expansion.statement;
+  // The businesses are never named here; the count offered is the fixed per-step maximum.
+  $("expansion-summary").textContent = expansion.available
+    ? `Expansion is available: up to ${plural(expansion.max_businesses, "shared business", "shared businesses")}, one SerpApi request each. The server chooses them and does not name them. You confirm the exact cost before anything is sent.`
+    : expansion.performed ? "No further business qualifies for expansion." : "Expansion is not available for this investigation.";
+  $("expansion-why").textContent = expansion.available ? "Why it is available, and what it collects" : "Why it is not available";
   $("expansion-form").hidden = !expansion.available;
   if (expansion.available) {
     $("expansion-count").max = String(expansion.max_businesses);
@@ -966,6 +1002,7 @@ document.addEventListener("keydown", (event) => {
 });
 $("demo-expand").addEventListener("click", () => loadDemoStep(demoSteps + 1));
 $("demo-reset").addEventListener("click", () => loadDemoStep(0));
+$("key-demo").addEventListener("click", () => { location.hash = "synthetic"; });
 window.addEventListener("hashchange", () => load(modeFromHash()));
 
 let resizeTimer = null;

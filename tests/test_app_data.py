@@ -189,6 +189,10 @@ class SyntheticExpansionTests(unittest.TestCase):
         self.assertEqual((expansion["findings"], expansion["limits"], expansion["new_nodes"]), ([], [], []))
         for needed in ("Quill and Ledger Tax Advisers and Lumen Yoga Loft are listed", "no request is sent and no credit is used", "With real data each page is one SerpApi request that you confirm first"):
             self.assertIn(needed, expansion["statement"])
+        # The names offered for the next step are exactly the ones the statement gives.
+        self.assertEqual(expansion["next_businesses"], ["Quill and Ledger Tax Advisers", "Lumen Yoga Loft"])
+        self.assertEqual(synthetic_view(1)["expansion"]["next_businesses"], ["Fernbank Grocers"])
+        self.assertEqual(synthetic_view(2)["expansion"]["next_businesses"], [])
         self.assertEqual(synthetic_view(), synthetic_view(0))
 
     def test_steps_follow_the_real_eligibility_rule_in_a_fixed_order(self):

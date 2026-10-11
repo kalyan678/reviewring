@@ -43,7 +43,19 @@
         <li data-step="4">Results</li>
       </ol>
       <p class="muted">Search Google Maps through SerpApi, choose a business, then collect up to four pages of its reviews and a few reviewers' review histories. You are told the most it can cost before anything is sent, and nothing is sent until you confirm.</p>
-      <p id="key-missing" class="notice" hidden>No SerpApi key is configured, so only searches and businesses already saved on this computer can be used. Add SERPAPI_API_KEY to the .env file and restart to collect new data.</p>
+      <div id="key-missing" class="notice onboarding" hidden>
+        <strong>Real investigations need a SerpApi key on this computer</strong>
+        <p>None is configured, so nothing new can be collected. Searches and businesses already saved here still work.</p>
+        <p>You do not need a key to explore the fictional demo.</p>
+        <div class="row">
+          <button type="button" id="key-demo" class="primary">Explore Demo</button>
+        </div>
+        <details class="more">
+          <summary>How to set up a key</summary>
+          <p class="muted">Copy .env.example to .env in the project folder, set SERPAPI_API_KEY to your own key, and restart ReviewRing. The steps are in README.md under "Optional: live investigation with your own SerpApi key". The key stays on this computer and is never sent to the browser.</p>
+          <p class="muted">A hosted public copy of ReviewRing is the fictional demo only: it has no Investigate tab and cannot run real investigations.</p>
+        </details>
+      </div>
 
       <form id="search-form" class="row search">
         <label for="query">Business search</label>
@@ -94,7 +106,11 @@
 
       <div id="expansion" class="expansion" hidden>
         <h3>Second stage: expand to shared businesses</h3>
-        <p id="expansion-statement" class="muted"></p>
+        <p id="expansion-summary"></p>
+        <details class="more">
+          <summary id="expansion-why">Why, and what it costs</summary>
+          <p id="expansion-statement" class="muted"></p>
+        </details>
         <form id="expansion-form" class="row" hidden>
           <label for="expansion-count" id="expansion-count-label">Shared businesses to expand</label>
           <input id="expansion-count" name="expansion-count" type="number" min="1" max="2" value="1" required>
@@ -166,10 +182,10 @@
               <button type="button" id="demo-expand" class="primary">Expand network</button>
               <button type="button" id="demo-reset" class="secondary" hidden>Start again</button>
             </div>
-            <p class="caption">Fictional data. No request is sent and no credit is used.</p>
+            <p id="demo-next" class="next"></p>
             <p id="demo-error" class="error" role="alert" hidden></p>
             <details class="more">
-              <summary>Why expansion is or is not available</summary>
+              <summary id="demo-why">Why these businesses qualify</summary>
               <p id="demo-statement" class="muted"></p>
             </details>
             <div id="demo-result" hidden>
@@ -200,13 +216,14 @@
 
         <section class="card" aria-labelledby="coverage-title">
           <h2 id="coverage-title">Coverage</h2>
-          <p class="muted">What was collected, and what is known to exist but was not.</p>
+          <p class="muted">Filled bar: collected. Empty track: reported to exist, not collected. A full bar covers one business's reported reviews, not the whole investigation.</p>
           <div id="coverage"></div>
         </section>
       </div>
 
       <section class="card" aria-labelledby="ratings-title">
-        <h2 id="ratings-title">Ratings</h2>
+        <h2 id="ratings-title">Business ratings vs. collected reviews</h2>
+        <p class="muted">Google's rating covers every review of a business. The collected reviews are a small, unrepresentative sample, so no average is computed from them.</p>
         <div id="ratings"></div>
       </section>
     </div>

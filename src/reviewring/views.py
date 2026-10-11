@@ -903,6 +903,8 @@ def synthetic_view(expansions: int = 0) -> dict[str, Any]:
         "max_businesses": MAX_EXPANSION_BUSINESSES if upcoming else 0,
         "steps": len(steps),
         "performed": len(pages),
+        # The fictional businesses the next step would expand. Real expansion never names them.
+        "next_businesses": upcoming,
         "last": None,
         "statement": statement,
         # Nodes that the latest step added or turned into a collected page.

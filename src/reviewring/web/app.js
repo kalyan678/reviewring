@@ -111,8 +111,8 @@ function showBanner(mode) {
   } else if (mode === "synthetic") {
     replace(
       banner,
-      el("strong", {}, "Fictional data"),
-      document.createTextNode(" Invented reviewers and businesses. No SerpApi key, request or credit is used."),
+      el("strong", {}, "Demo \u00b7 Fictional data"),
+      document.createTextNode(" Reviewers and businesses are invented. No SerpApi credits are used."),
       hosted
         ? el("span", { class: "hosted-note" }, " This public demo serves only this fictional walkthrough. Live investigation is switched off here and runs only on your own computer.")
         : null
@@ -563,7 +563,6 @@ function renderNetwork(view) {
   $("network-note").textContent = network.aggregated
     ? "Reviewers with the same connections are merged into one circle, sized by how many they are. Businesses are labelled by letter. Individual reviewers are not shown."
     : "Each circle is one fictional reviewer and each square one fictional business. A line means that reviewer reviewed that business.";
-  $("network-chip").hidden = !view.synthetic;
   $("network-suppressed").hidden = true;
   const hidden = network.suppressed;
   if (hidden && hidden.reviewers) {
@@ -655,7 +654,7 @@ function renderNetwork(view) {
   $("group-focus").hidden = !focusable.length;
   replace(
     $("group-focus"),
-    focusable.length ? el("span", { class: "focus-label" }, "Focus on") : null,
+    focusable.length ? el("span", { class: "focus-label", id: "group-focus-label" }, "Explore overlap groups") : null,
     ...focusable.map((group) => {
       const button = el("button", { type: "button", class: "focus-chip", "aria-pressed": "false" }, `${group.label} \u00b7 ${plural(group.reviewers, "reviewer")}`);
       button.dataset.group = group.label;

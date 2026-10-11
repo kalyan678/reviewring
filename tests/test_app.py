@@ -241,11 +241,16 @@ class StaticPageTests(unittest.TestCase):
         self.assertNotIn("post(", script[start:start + 800])
 
     def test_synthetic_mode_is_conspicuously_labelled(self):
-        self.assertIn('el("strong", {}, "Fictional data")', self.sources["app.js"])
-        self.assertIn("fictional", self.sources["app.js"])
+        script, css = self.sources["app.js"], self.sources["app.css"]
+        self.assertIn('el("strong", {}, "Demo \\u00b7 Fictional data")', script)
+        self.assertIn("Reviewers and businesses are invented. No SerpApi credits are used.", script)
         html = self.sources["index.html"]
-        # The label is on the strip, the network and the expansion panel, with detail one click away.
-        self.assertEqual(html.count('chip chip-fictional'), 2)
+        # One indicator, not one per card; it stays in view while the demo scrolls.
+        self.assertNotIn("chip-fictional", html + script + css)
+        self.assertEqual(html.count("Fictional data"), 1)  # the caption under the Expand button
+        strip = css[css.index(".banner.synthetic {"):css.index("}", css.index(".banner.synthetic {"))]
+        self.assertIn("position: sticky;", strip)
+        self.assertIn("top: 0;", strip)
         self.assertIn("About the demo data", html)
         self.assertIn("Nothing was collected from SerpApi or Google Maps", html)
 
@@ -285,6 +290,13 @@ class StaticPageTests(unittest.TestCase):
     def test_group_focus_exists_only_for_groups_the_server_described(self):
         script = self.sources["app.js"]
         self.assertIn("view.indicators.groups.filter((group) => group.node_ids)", script)
+        self.assertIn('"Explore overlap groups"', script)
+        self.assertNotIn('"Focus on"', script)
+        # Real buttons, so Enter and Space work without extra code, with the state exposed.
+        self.assertIn('el("button", { type: "button", class: "focus-chip", "aria-pressed": "false" }', script)
+        css = self.sources["app.css"]
+        self.assertIn('.focus-chip[aria-pressed="true"]::before', css)
+        self.assertIn("cursor: pointer;", css[css.index(".focus-chip {"):css.index(".focus-chip::before")])
         self.assertIn("ids: new Set(group.node_ids)", script)
         # Emphasis follows drawn lines only: both ends shown, and touching the focused node if there is one.
         self.assertIn("ids.has(link.dataset.source) && ids.has(link.dataset.target)", script)

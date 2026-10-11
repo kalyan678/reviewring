@@ -130,9 +130,21 @@ p { max-width: 78ch; }
   text-transform: uppercase;
 }
 /* The fictional-data indicator: compact, amber, and nothing else is amber. */
-.banner.synthetic { border: 0; background: transparent; padding: 0 0.15rem; margin-bottom: 0.35rem; color: var(--text-2); }
-.banner.synthetic strong, .chip.chip-fictional { border-color: var(--amber); background: var(--amber); color: #2a1c00; }
-.chip.chip-fictional { margin-left: 0.5rem; font-weight: 700; vertical-align: 0.1rem; font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; }
+/* One indicator for the whole demo. It stays at the top of the window while the
+   page scrolls, so no part of the demo is ever on screen without it. */
+.banner.synthetic {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--page);
+  padding: 0.5rem 0.15rem;
+  margin-bottom: 0.35rem;
+  color: var(--text-2);
+}
+.banner.synthetic strong { border-color: var(--amber); background: var(--amber); color: #2a1c00; }
 .demo-about { max-width: 1240px; margin: 0 1.25rem 1rem; border-top: 0; }
 .demo-about summary { min-height: 32px; font-size: 0.84rem; }
 @media (min-width: 1280px) { .demo-about { margin-left: auto; margin-right: auto; } }
@@ -158,7 +170,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 0 1.25rem; display: grid; gap
 .detail { order: 3; }
 @media (min-width: 1040px) {
   .workspace { grid-template-columns: minmax(0, 1fr) 372px; align-items: start; }
-  .rail { display: grid; gap: 1.25rem; position: sticky; top: 1rem; }
+  .rail { display: grid; gap: 1.25rem; position: sticky; top: 3.5rem; }
   .network-card { order: 0; }
 }
 
@@ -330,22 +342,44 @@ button:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
 .key-added { background: var(--text); border-radius: 50%; box-shadow: 0 0 0 4px var(--accent-soft); }
 
 .focus-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.75rem; }
-.focus-label { color: var(--text-3); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 0.15rem; }
+.focus-label { color: var(--text-2); font-size: 0.86rem; font-weight: 600; margin-right: 0.25rem; }
+/* These are buttons and look like buttons: filled, bordered, with a marker that
+   is empty when off and ticked when on, so the state does not rest on colour. */
 .focus-chip {
   font: inherit;
-  font-size: 0.84rem;
+  font-size: 0.86rem;
   font-weight: 600;
-  min-height: 36px;
-  padding: 0.3rem 0.8rem;
-  border-radius: 999px;
+  min-height: 40px;
+  padding: 0.35rem 0.9rem 0.35rem 0.7rem;
+  border-radius: var(--radius-small);
   border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--text-2);
+  background: var(--surface-3);
+  color: var(--text);
   cursor: pointer;
 }
-.focus-chip:hover { border-color: var(--group); color: var(--text); }
-.focus-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
-.focus-chip[aria-pressed="true"]::before { content: "\2713\00a0"; color: var(--accent); }
+.focus-chip::before {
+  content: "";
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  margin-right: 0.5rem;
+  border: 2px solid var(--group);
+  border-radius: 50%;
+  vertical-align: -0.1rem;
+}
+.focus-chip:hover { border-color: var(--accent); background: var(--surface-2); }
+.focus-chip:active { background: var(--accent-soft); }
+.focus-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.focus-chip[aria-pressed="true"]::before {
+  content: "\2713";
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  color: var(--accent);
+  font-weight: 700;
+  vertical-align: 0;
+}
 
 .graph {
   background: var(--surface-2);

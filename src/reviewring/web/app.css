@@ -329,6 +329,24 @@ button:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
 .key-group { border: 3px solid var(--group); border-radius: 50%; }
 .key-added { background: var(--text); border-radius: 50%; box-shadow: 0 0 0 4px var(--accent-soft); }
 
+.focus-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.75rem; }
+.focus-label { color: var(--text-3); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; margin-right: 0.15rem; }
+.focus-chip {
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  min-height: 36px;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.focus-chip:hover { border-color: var(--group); color: var(--text); }
+.focus-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.focus-chip[aria-pressed="true"]::before { content: "\2713\00a0"; color: var(--accent); }
+
 .graph {
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -348,11 +366,16 @@ button:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
 .node text { fill: var(--text); font-size: 13px; }
 .node .badge { fill: var(--text-2); font-size: 11px; font-weight: 700; }
 .node .hit { fill: transparent; }
-.node:focus-visible { outline: none; }
+/* A focused node is marked on its shape (and previewed like a hover), not with a box around the label. */
+.node:focus, .node:focus-visible { outline: none; }
 .node:focus-visible .shape { stroke: var(--focus); stroke-width: 3; }
 .node.added .shape { stroke: var(--text); stroke-width: 3; }
 .node.added text { font-weight: 700; }
+.node.hovered .shape { stroke: var(--text); stroke-width: 3; }
 .node.selected .shape { stroke: var(--focus); stroke-width: 3; }
+.node .pin { display: none; fill: none; stroke: var(--focus); stroke-width: 2.5; }
+.node.selected .pin { display: block; }
+.node.selected text { font-weight: 700; }
 .dim { opacity: 0.14; }
 .link.active { stroke: var(--accent); stroke-opacity: 0.95; }
 

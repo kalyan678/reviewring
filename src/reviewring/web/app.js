@@ -8,7 +8,8 @@ const ROW_HEIGHT = 44;
 
 const $ = (id) => document.getElementById(id);
 let current = null; // the view being shown
-let selection = null; // { ids: Set, title, lines, pinned }
+let pinned = null; // persistent: a selected node or a focused group { ids: Set, title, lines, focus?, group? }
+let hover = null; // temporary: the node under the pointer or keyboard focus
 let demoSteps = 0; // expansion steps applied to the synthetic demo; reset whenever the demo is opened
 let hosted = false; // true when the server is the public demo, which serves fictional data only
 let startMode = "synthetic"; // where the page opens when the address names no tab; set from the server's answer
@@ -56,7 +57,9 @@ async function request(path, options) {
 
 function show(view) {
   current = view;
-  selection = null;
+  // A new view (another tab, or an expansion step) starts from the full network.
+  pinned = null;
+  hover = null;
   $("state").hidden = true;
   $("dashboard").hidden = false;
   render(view);
@@ -352,8 +355,8 @@ function renderIndicators(view) {
         card.append(el("p", {}, `Reviewers: ${group.members.join(", ")}.`), el("p", {}, `Shared businesses: ${group.businesses.join(", ")}.`));
         const button = el("button", { type: "button", class: "group-button" }, `Show ${group.label} in the network`);
         button.addEventListener("click", () => {
-          select({ ids: new Set(group.node_ids), title: group.label, lines: [`${plural(group.reviewers, "reviewer")} and the businesses at least two of them reviewed.`], pinned: true });
-          $("graph").scrollIntoView({ behavior: "smooth", block: "nearest" });
+          if (!(pinned && pinned.group === group.label)) focusGroup(group);
+          $("graph").scrollIntoView({ block: "nearest" });
         });
         card.append(button);
       }
@@ -444,7 +447,7 @@ function neighbours(id) {
   return ids;
 }
 
-function nodeSelection(node, pinned) {
+function nodeSelection(node) {
   const byId = new Map(current.network.nodes.map((n) => [n.id, n]));
   const connections = current.network.links
     .filter((link) => link.source === node.id || link.target === node.id)
@@ -452,40 +455,88 @@ function nodeSelection(node, pinned) {
       const other = byId.get(link.source === node.id ? link.target : link.source);
       return link.count > 1 ? `${other.label} (${link.count} links)` : other.label;
     });
-  return { ids: neighbours(node.id), title: node.label, lines: node.detail, connections, focus: node.id, pinned };
+  return { ids: neighbours(node.id), title: node.label, lines: node.detail, connections, focus: node.id };
 }
 
-function select(next) {
-  selection = next;
+// What the network emphasises has two layers:
+//   pinned  - persistent: one selected node, or one focused overlap group. A new pin replaces the old one.
+//   hover   - temporary: the node under the pointer or keyboard focus. It is shown while it lasts and
+//             then gives way to the pin again; it never changes the pin.
+// Only relationships that are drawn are emphasised: a node, the lines that touch it, and the nodes at
+// their other ends. Reviewers are never joined to each other directly, because the data links them
+// only through the businesses they both reviewed.
+function pin(next) {
+  pinned = next;
+  hover = null;
   applySelection();
+}
+
+function preview(next) {
+  hover = next;
+  applySelection();
+}
+
+function clearSelection() {
+  pinned = null;
+  hover = null;
+  applySelection();
+}
+
+function focusGroup(group) {
+  if (pinned && pinned.group === group.label) return clearSelection();
+  pin({
+    group: group.label,
+    ids: new Set(group.node_ids),
+    title: group.label,
+    lines: [
+      `${plural(group.reviewers, "reviewer")}, ${plural(group.shared_businesses, "shared business", "shared businesses")}, ${plural(group.pairs, "linked pair")}.`,
+      `Review history collected for ${group.histories_fetched} of ${group.reviewers} members.`,
+      "The lines shown are members' reviews of businesses at least two of them reviewed.",
+      "A group is a pattern to look into, not a conclusion.",
+    ],
+  });
 }
 
 function applySelection() {
   const graph = $("graph");
-  const ids = selection ? selection.ids : null;
+  const shown = hover || pinned;
+  const ids = shown ? shown.ids : null;
   for (const node of graph.querySelectorAll(".node")) {
-    node.classList.toggle("dim", Boolean(ids) && !ids.has(node.dataset.id));
-    node.classList.toggle("selected", Boolean(selection) && selection.focus === node.dataset.id);
+    const id = node.dataset.id;
+    const isPinned = Boolean(pinned) && pinned.focus === id;
+    node.classList.toggle("dim", Boolean(ids) && !ids.has(id));
+    node.classList.toggle("selected", isPinned);
+    node.classList.toggle("hovered", Boolean(hover) && hover.focus === id);
+    node.setAttribute("aria-pressed", String(isPinned));
   }
   for (const link of graph.querySelectorAll(".link")) {
     const active = Boolean(ids) && ids.has(link.dataset.source) && ids.has(link.dataset.target) &&
-      (!selection.focus || link.dataset.source === selection.focus || link.dataset.target === selection.focus);
+      (!shown.focus || link.dataset.source === shown.focus || link.dataset.target === shown.focus);
     link.classList.toggle("active", active);
     link.classList.toggle("dim", Boolean(ids) && !active);
   }
-  $("clear").hidden = !(selection && selection.pinned);
+  $("clear").hidden = !pinned;
+  $("clear").textContent = pinned && pinned.group ? "Show full network" : "Clear selection";
+  for (const button of $("group-focus").querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(Boolean(pinned) && pinned.group === button.dataset.group));
+  }
   const detail = $("detail");
-  if (!selection) {
-    replace(detail, el("h3", {}, "Selection"), el("p", { class: "title" }, "Nothing selected"), el("p", { class: "muted" }, "Point at, tap, or tab to a node to see what it is connected to and what was not collected."));
+  if (!shown) {
+    replace(detail, el("h3", {}, "Selection"), el("p", { class: "title" }, "Nothing selected"), el("p", { class: "muted" }, "Point at a node to preview its connections. Click, tap or press Enter to keep it selected; Escape clears."));
     return;
   }
+  // The state is named in words, so it does not depend on colour.
+  const kind = shown === hover ? "Preview" : shown.group ? "Group focus" : "Selected";
   const lines = el("ul");
-  for (const line of selection.lines) lines.append(el("li", {}, line));
-  const parts = [el("h3", {}, "Selection"), el("p", { class: "title" }, selection.title), lines];
-  if (selection.connections && selection.connections.length) {
+  for (const line of shown.lines) lines.append(el("li", {}, line));
+  const parts = [el("h3", {}, kind), el("p", { class: "title" }, shown.title), lines];
+  if (shown.connections && shown.connections.length) {
     const list = el("ul", { class: "connections" });
-    for (const item of selection.connections) list.append(el("li", {}, item));
+    for (const item of shown.connections) list.append(el("li", {}, item));
     parts.push(el("h3", {}, "Connected to"), list);
+  }
+  if (shown === hover && pinned && pinned.focus !== hover.focus) {
+    parts.push(el("p", { class: "muted" }, `${pinned.title} stays ${pinned.group ? "in focus" : "selected"}.`));
   }
   replace(detail, ...parts);
 }
@@ -544,10 +595,12 @@ function renderNetwork(view) {
     const { x, y } = position.get(node.id);
     const r = radius(node);
     const added = view.expansion && view.expansion.new_nodes && view.expansion.new_nodes.includes(node.id);
-    const group = svg("g", { class: `node ${node.kind}${added ? " added" : ""}`, tabindex: "0", role: "button", "aria-label": `${node.label}. ${node.detail.join(" ")}` });
+    const group = svg("g", { class: `node ${node.kind}${added ? " added" : ""}`, tabindex: "0", role: "button", "aria-pressed": "false", "aria-label": `${node.label}. ${node.detail.join(" ")}` });
     group.dataset.id = node.id;
     group.append(svg("rect", { class: "hit", x: String(x - 22), y: String(y - ROW_HEIGHT / 2), width: "44", height: String(ROW_HEIGHT) }));
     if (added) group.append(svg("circle", { class: "halo", cx: String(x), cy: String(y), r: String(r + 11) }));
+    // A second outline, drawn only for the selected node: the state is a shape, not only a colour.
+    group.append(svg("circle", { class: "pin", cx: String(x), cy: String(y), r: String(r + (node.group ? 10 : 6) + (node.incomplete ? 4 : 0)) }));
     if (node.group) group.append(svg("circle", { class: "ring", cx: String(x), cy: String(y), r: String(r + 5) }));
     if (node.incomplete) group.append(svg("circle", { class: "outline", cx: String(x), cy: String(y), r: String(r + (node.group ? 9 : 4)) }));
     group.append(
@@ -560,23 +613,37 @@ function renderNetwork(view) {
     const label = (node.group ? `G${node.group} ` : "") + truncate(node.label, maxChars[node.kind]);
     group.append(svg("text", { x: String(left ? x - offset : x + offset), y: String(y + 4), "text-anchor": left ? "end" : "start" }, label));
 
-    const preview = () => { if (!(selection && selection.pinned)) select(nodeSelection(node, false)); };
-    const clear = () => { if (selection && !selection.pinned) select(null); };
-    group.addEventListener("mouseenter", preview);
-    group.addEventListener("mouseleave", clear);
-    group.addEventListener("focus", preview);
-    group.addEventListener("blur", clear);
+    const enter = () => preview(nodeSelection(node));
+    const leave = () => { if (hover && hover.focus === node.id) preview(null); };
+    group.addEventListener("mouseenter", enter);
+    group.addEventListener("mouseleave", leave);
+    group.addEventListener("focus", enter);
+    group.addEventListener("blur", leave);
     group.addEventListener("click", () => {
-      const pinnedHere = selection && selection.pinned && selection.focus === node.id;
-      select(pinnedHere ? null : nodeSelection(node, true));
+      // Selecting the selected node again releases it; anything else replaces the pin.
+      if (pinned && pinned.focus === node.id) { pinned = null; applySelection(); } else pin(nodeSelection(node));
     });
     group.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") { event.preventDefault(); group.dispatchEvent(new Event("click")); }
-      if (event.key === "Escape") select(null);
     });
     root.append(group);
   }
   replace(container, root);
+
+  // Focus controls for the overlap groups the server chose to describe. A group
+  // it withheld has no entry here, so it cannot be focused or revealed.
+  const focusable = view.indicators.groups.filter((group) => group.node_ids);
+  $("group-focus").hidden = !focusable.length;
+  replace(
+    $("group-focus"),
+    focusable.length ? el("span", { class: "focus-label" }, "Focus on") : null,
+    ...focusable.map((group) => {
+      const button = el("button", { type: "button", class: "focus-chip", "aria-pressed": "false" }, `${group.label} \u00b7 ${plural(group.reviewers, "reviewer")}`);
+      button.dataset.group = group.label;
+      button.addEventListener("click", () => focusGroup(group));
+      return button;
+    })
+  );
 
   const table = $("links-table");
   const head = el("tr");
@@ -842,7 +909,10 @@ $("confirm-no").addEventListener("click", closeConfirm);
 for (const mode of MODES) {
   $(`mode-${mode}`).addEventListener("click", () => { location.hash = mode; });
 }
-$("clear").addEventListener("click", () => select(null));
+$("clear").addEventListener("click", clearSelection);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && (pinned || hover)) clearSelection();
+});
 $("demo-expand").addEventListener("click", () => loadDemoStep(demoSteps + 1));
 $("demo-reset").addEventListener("click", () => loadDemoStep(0));
 window.addEventListener("hashchange", () => load(modeFromHash()));

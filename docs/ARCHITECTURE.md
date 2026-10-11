@@ -241,6 +241,17 @@ The synthetic demo can be expanded step by step so the whole journey can be seen
 - `GET /api/view?mode=synthetic&expansions=N` serves a step. It is stateless and idempotent, so the same number always gives the same view. It needs no plan and no token because nothing is requested or spent: the synthetic modules do not import the SerpApi client.
 - The view marks the nodes the latest step added. Real views never carry the demo's expansion block.
 
+### Network interaction
+
+The network is drawn once per view at fixed positions; nothing moves it afterwards. What is emphasised has two layers, both in the page only:
+
+- **Pinned** (persistent): one selected node, or one focused overlap group. A new pin replaces the old one. Escape, the clear control, or selecting the same thing again releases it. A new view, including an expansion step, starts unpinned.
+- **Hover** (temporary): the node under the pointer or keyboard focus. It is shown while it lasts and then gives way to the pin; it never changes the pin.
+
+Emphasis follows drawn lines only. For a node: the node, the lines touching it, and the nodes at their other ends. For a group: its reviewers, the businesses at least two of them reviewed, and the lines between those. No line is drawn or implied between two reviewers.
+
+Group focus is offered only for groups whose view row carries node identifiers, which the server provides only for fictional data. A real group below the minimum size has no row at all, and a larger real group has a row without identifiers because the real network merges reviewers, so neither can be focused or revealed from the page. Selection state is also stated in words ("Preview", "Selected", "Group focus"), drawn as a second outline, and exposed as `aria-pressed`.
+
 ### Hosted demo mode
 
 `REVIEWRING_HOSTED_DEMO=1` starts a different handler, `app._HostedHandler`, bound to all interfaces on `PORT`. It is not the local handler with routes removed: it is a separate allowlist, so a route added to the local dashboard later is not exposed publicly unless someone adds it there on purpose.

@@ -249,6 +249,33 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn("About the demo data", html)
         self.assertIn("Nothing was collected from SerpApi or Google Maps", html)
 
+    def test_network_selection_has_a_persistent_and_a_temporary_layer(self):
+        html, script, css = self.sources["index.html"], self.sources["app.js"], self.sources["app.css"]
+        # Hover never changes the pin, and what is shown is the hover or else the pin.
+        self.assertIn("const shown = hover || pinned;", script)
+        body = script[script.index("function preview(next)"):script.index("function clearSelection()")]
+        self.assertNotIn("pinned =", body)
+        # A new view starts from the full network.
+        self.assertRegex(script, r"current = view;[\s\S]{0,160}pinned = null;\s+hover = null;")
+        # Escape and a visible control both clear; the control says what it will do.
+        self.assertIn('if (event.key === "Escape" && (pinned || hover)) clearSelection();', script)
+        self.assertIn('pinned && pinned.group ? "Show full network" : "Clear selection"', script)
+        # Selection is stated in words and drawn as an extra outline, not only as a colour.
+        self.assertIn('shown === hover ? "Preview" : shown.group ? "Group focus" : "Selected"', script)
+        self.assertIn(".node.selected .pin { display: block; }", css)
+        self.assertIn('"aria-pressed": "false"', script)
+        self.assertIn('id="group-focus"', html)
+
+    def test_group_focus_exists_only_for_groups_the_server_described(self):
+        script = self.sources["app.js"]
+        self.assertIn("view.indicators.groups.filter((group) => group.node_ids)", script)
+        self.assertIn("ids: new Set(group.node_ids)", script)
+        # Emphasis follows drawn lines only: both ends shown, and touching the focused node if there is one.
+        self.assertIn("ids.has(link.dataset.source) && ids.has(link.dataset.target)", script)
+        self.assertNotIn("force", script.lower().replace("reinforce", ""))
+        for moving in ("requestAnimationFrame", "setInterval", "drag", "wheel"):
+            self.assertNotIn(moving, script)
+
     def test_tabs_are_three_independent_workspaces_in_the_agreed_order(self):
         html, script = self.sources["index.html"], self.sources["app.js"]
         order = [html.index(f'id="mode-{name}"') for name in ("investigate", "synthetic", "real")]

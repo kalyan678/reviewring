@@ -377,6 +377,7 @@ button:disabled, input:disabled { opacity: 0.45; cursor: not-allowed; }
 .node.selected .pin { display: block; }
 .node.selected text { font-weight: 700; }
 .dim { opacity: 0.14; }
+.link.added { stroke: var(--text); stroke-opacity: 0.85; stroke-dasharray: 6 4; }
 .link.active { stroke: var(--accent); stroke-opacity: 0.95; }
 
 .detail { font-size: 0.92rem; min-height: 7rem; }
@@ -399,7 +400,19 @@ tr:last-child td { border-bottom: 0; }
 .rail-card { padding: 1.2rem 1.25rem; }
 .demo-expansion { border-color: var(--border-strong); }
 .demo-expansion .steps { margin-top: 0.75rem; }
+/* Focus is moved to this heading after a step so a screen reader lands on the result; it is not a control. */
+#demo-expansion-title:focus { outline: none; }
 .stage { color: var(--text-2); font-size: 0.92rem; }
+.update {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-small);
+  background: var(--accent-soft);
+  font-size: 0.9rem;
+  color: var(--text-2);
+}
+.update strong { display: block; color: var(--text); margin-bottom: 0.15rem; }
 .row { display: flex; flex-wrap: wrap; gap: 0.6rem 0.75rem; align-items: center; margin: 0.9rem 0 0; }
 
 .compare td, .compare th { padding: 0.5rem 0.4rem; }
@@ -483,8 +496,13 @@ legend { font-weight: 600; padding: 0 0.35rem; font-size: 0.92rem; }
   .tile .value { font-size: 1.7rem; }
 }
 
+/* What an expansion step added arrives once, briefly, when the step is applied.
+   Nothing else moves, and nothing moves at all when reduced motion is requested. */
 @media (prefers-reduced-motion: no-preference) {
-  .node.added .halo { animation: arrive 0.9s ease-out 1; }
+  .entering .node.added, .entering .link.added { animation: enter 0.45s ease-out 1 both; }
+  .entering .node.added .halo { animation: arrive 0.9s ease-out 1; }
+  .update.fresh { animation: enter 0.45s ease-out 1 both; }
+  @keyframes enter { from { opacity: 0; } to { opacity: 1; } }
   @keyframes arrive { from { fill-opacity: 0.5; } to { fill-opacity: 0.16; } }
 }
 

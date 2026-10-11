@@ -239,7 +239,8 @@ The synthetic demo can be expanded step by step so the whole journey can be seen
 - `synthetic.synthetic_collection(steps)` applies `indicators.expansion_candidates` to the fictional collection and, per step, adds the fictional first review page of at most `MAX_EXPANSION_BUSINESSES` businesses, in the order the rule gives. A step with no candidate ends the sequence.
 - `views.synthetic_view(steps)` builds the view from the merged graph with `build_view`, and `views.expansion_summary` produces the before-and-after findings and limits. The live workflow calls the same `expansion_summary`; for fictional data it states exact counts and names the businesses, for real data it bands small counts and says the businesses are not identified.
 - `GET /api/view?mode=synthetic&expansions=N` serves a step. It is stateless and idempotent, so the same number always gives the same view. It needs no plan and no token because nothing is requested or spent: the synthetic modules do not import the SerpApi client.
-- The view marks the nodes the latest step added. Real views never carry the demo's expansion block.
+- The view lists the nodes the latest step added or turned into a collected page (`new_nodes`) and the reviewer-business links first observed in that step (`new_links`), both computed by comparing the graph before and after the step. The page marks exactly those, and its notice counts them; it derives nothing itself. A link can be new between two nodes that were already drawn. Real views never carry the demo's expansion block.
+- What a step added fades in once, for the drawing made by that step only, and not at all under `prefers-reduced-motion`. Existing nodes are not animated, but the layout is recomputed for the larger graph, so they can move to new rows between steps.
 
 ### Network interaction
 

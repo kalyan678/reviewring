@@ -266,6 +266,22 @@ class StaticPageTests(unittest.TestCase):
         self.assertIn('"aria-pressed": "false"', script)
         self.assertIn('id="group-focus"', html)
 
+    def test_expansion_feedback_comes_from_server_figures_and_moves_only_once(self):
+        html, script, css = self.sources["index.html"], self.sources["app.js"], self.sources["app.css"]
+        self.assertIn('id="demo-update" class="update" role="status" aria-live="polite"', html)
+        self.assertIn("expansion.new_links.length", script)
+        self.assertIn("fresh.has(node.id)", script)
+        self.assertIn('expansion.available ? "" : " (final step)"', script)
+        # The entrance plays only for the drawing made by an expansion step, never on a redraw.
+        self.assertRegex(script, r"entering = advanced;\s+show\(view\);\s+entering = false;")
+        self.assertIn('if (entering) root.setAttribute("class", "entering");', script)
+        # All motion sits behind the reduced-motion preference.
+        motion = css[css.index("@media (prefers-reduced-motion: no-preference)"):]
+        self.assertEqual(css.count("animation:"), motion.count("animation:"))
+        self.assertEqual(css.count("@keyframes"), motion.count("@keyframes"))
+        self.assertNotIn("transition", css)
+        self.assertNotIn("infinite", css)
+
     def test_group_focus_exists_only_for_groups_the_server_described(self):
         script = self.sources["app.js"]
         self.assertIn("view.indicators.groups.filter((group) => group.node_ids)", script)

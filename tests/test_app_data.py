@@ -245,6 +245,29 @@ class SyntheticExpansionTests(unittest.TestCase):
             self.assertNotIn("Among the 8 reviewers with a retrieved history", statement)
             self.assertNotIn("fraud", statement)
 
+    def test_new_links_are_exactly_the_links_the_latest_step_added(self):
+        self.assertEqual(synthetic_view()["expansion"]["new_links"], [])
+        original, steps = synthetic.synthetic_collection(2)
+        collected = original
+        for number, step in enumerate(steps, start=1):
+            before, collected = set(build_graph(collected).edges), collected + step
+            added = set(build_graph(collected).edges) - before
+            view = synthetic_view(number)
+            self.assertEqual({tuple(link) for link in view["expansion"]["new_links"]}, added)
+            # Every new link is a reviewer-business link that is drawn in this view.
+            drawn = {(link["source"], link["target"]) for link in view["network"]["links"]}
+            self.assertLessEqual(added, drawn)
+            self.assertTrue(all(r.startswith("synthetic-reviewer-") and b.startswith("synthetic-business-") for r, b in added))
+        self.assertEqual([len(synthetic_view(n)["expansion"]["new_links"]) for n in (1, 2)], [6, 2])
+        # They agree with the link counts in the comparison: 31, then 37, then 39.
+        edges = {row["key"]: row for row in synthetic_view(2)["expansion"]["comparison"]}["edges"]
+        self.assertEqual((edges["before"], edges["after"]), (31, 39))
+        # A link can be new between two nodes that were already drawn: the reviewer first
+        # seen in step one is also on the page collected in step two.
+        second = synthetic_view(2)["expansion"]
+        self.assertIn([synthetic.reviewer_id(19), synthetic.business_id(5)], second["new_links"])
+        self.assertNotIn(synthetic.reviewer_id(19), second["new_nodes"])
+
     def test_expanded_pages_are_distinguished_from_history_only_businesses(self):
         self.assertEqual([synthetic_view(n)["coverage"]["history_only_businesses"] for n in range(3)], [4, 2, 1])
         rows = {row["label"]: row for row in synthetic_view(2)["coverage"]["business_rows"]}

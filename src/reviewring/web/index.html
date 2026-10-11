@@ -139,7 +139,7 @@
             <li><span class="key key-business"></span>Business</li>
             <li><span class="key key-group"></span>Ring: in an overlap group</li>
             <li><span class="key key-incomplete"></span>Dashed: more exists that was not collected</li>
-            <li id="legend-added" hidden><span class="key key-added"></span>Highlighted: added by the latest expansion step</li>
+            <li id="legend-added" hidden><span class="key key-added"></span>Highlighted: new in the latest expansion step (reviewers, review pages and lines)</li>
           </ul>
           <div id="group-focus" class="focus-bar" role="group" aria-label="Focus on an overlap group" hidden></div>
           <div id="graph" class="graph"></div>
@@ -158,6 +158,10 @@
             <h2 id="demo-expansion-title" tabindex="-1">Expand the investigation <span class="chip chip-fictional">Fictional data</span></h2>
             <ol id="demo-steps" class="steps steps-compact" aria-label="Expansion steps"></ol>
             <p id="demo-stage" class="stage"></p>
+            <div id="demo-update" class="update" role="status" aria-live="polite" hidden>
+              <strong id="demo-update-title"></strong>
+              <span id="demo-update-text"></span>
+            </div>
             <div class="row">
               <button type="button" id="demo-expand" class="primary">Expand network</button>
               <button type="button" id="demo-reset" class="secondary" hidden>Start again</button>
@@ -170,6 +174,7 @@
             </details>
             <div id="demo-result" hidden>
               <h3>Before and after</h3>
+              <p class="caption">The initial collection compared with what is collected now.</p>
               <div id="demo-compare"></div>
               <p class="caveat">The counts rose because more was collected, not because anyone behaved differently.</p>
               <details class="more">

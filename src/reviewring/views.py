@@ -907,6 +907,8 @@ def synthetic_view(expansions: int = 0) -> dict[str, Any]:
         "statement": statement,
         # Nodes that the latest step added or turned into a collected page.
         "new_nodes": sorted((graph.reviewer_ids - previous.reviewer_ids) | {p.page.business_id for p in steps[-1]}) if steps else [],
+        # Reviewer-business links first observed in the latest step, as [reviewer, business].
+        "new_links": sorted([reviewer_id, business_id] for reviewer_id, business_id in set(graph.edges) - set(previous.edges)),
         **(expansion_summary(original, pages, exact=True) if pages else {"comparison": [], "findings": [], "limits": []}),
     }
     return view

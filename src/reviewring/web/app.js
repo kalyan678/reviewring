@@ -12,6 +12,7 @@ let pinned = null; // persistent: a selected node or a focused group { ids: Set,
 let hover = null; // temporary: the node under the pointer or keyboard focus
 let demoSteps = 0; // expansion steps applied to the synthetic demo; reset whenever the demo is opened
 let hosted = false; // true when the server is the public demo, which serves fictional data only
+let entering = false; // true only for the first drawing after an expansion step, so what it added arrives once
 let startMode = "synthetic"; // where the page opens when the address names no tab; set from the server's answer
 
 function el(tag, attrs = {}, text) {
@@ -177,11 +178,23 @@ function renderDemoExpansion(view) {
     })
   );
   $("demo-stage").textContent = expansion.steps
-    ? `${plural(expansion.performed, "shared business", "shared businesses")} expanded so far. Nodes added by the latest step are highlighted in the network.`
+    ? `${plural(expansion.performed, "shared business", "shared businesses")} expanded so far.`
     : "Initial collection: three review pages and eight reviewer histories. Expanding collects the review page of a business two overlapping reviewers share, to see who else reviewed it.";
   if (!expansion.available) $("demo-stage").textContent += " No further business qualifies, so expansion stops here.";
   $("demo-statement").textContent = expansion.statement;
   replace($("demo-compare"), expansion.comparison.length ? comparisonTable(expansion.comparison) : null);
+  // What the latest step itself added, from the nodes and links the server marks as new.
+  $("demo-update").hidden = !expansion.steps;
+  $("demo-update").classList.remove("fresh");
+  if (expansion.steps) {
+    const fresh = new Set(expansion.new_nodes);
+    const pages = view.network.nodes.filter((node) => fresh.has(node.id) && node.kind === "business").map((node) => node.label);
+    const reviewers = view.network.nodes.filter((node) => fresh.has(node.id) && node.kind === "reviewer").length;
+    $("demo-update-title").textContent = `Network updated: Expansion ${expansion.steps}${expansion.available ? "" : " (final step)"}`;
+    $("demo-update-text").textContent =
+      `Collected the first review page of ${pages.join(" and ")}. ` +
+      `${reviewers ? plural(reviewers, "reviewer") : "No reviewer"} not seen before and ${plural(expansion.new_links.length, "new link")} now appear, highlighted in the network.`;
+  }
   $("demo-expand").hidden = !expansion.available;
   $("demo-expand").disabled = false;
   $("demo-reset").hidden = !expansion.steps;
@@ -197,8 +210,12 @@ async function loadDemoStep(steps) {
   try {
     const view = await request(`/api/view?mode=synthetic&expansions=${steps}`);
     if (modeFromHash() !== "synthetic") return;
+    const advanced = view.expansion.steps > demoSteps;
     demoSteps = view.expansion.steps;
+    entering = advanced;
     show(view);
+    entering = false;
+    $("demo-update").classList.toggle("fresh", advanced);
     $("demo-expansion-title").focus();
   } catch (error) {
     $("demo-expand").disabled = false;
@@ -577,12 +594,14 @@ function renderNetwork(view) {
   }
 
   const root = svg("svg", { viewBox: `0 0 ${width} ${height}`, role: "group", "aria-label": "Network of reviewers and businesses" });
+  if (entering) root.setAttribute("class", "entering");
+  const newLinks = new Set(((view.expansion && view.expansion.new_links) || []).map(([source, target]) => `${source}|${target}`));
   for (const link of network.links) {
     const a = position.get(link.source);
     const b = position.get(link.target);
     const mid = (a.x + b.x) / 2;
     const path = svg("path", {
-      class: "link",
+      class: newLinks.has(`${link.source}|${link.target}`) ? "link added" : "link",
       d: `M${a.x},${a.y} C${mid},${a.y} ${mid},${b.y} ${b.x},${b.y}`,
       "stroke-width": String(Math.min(10, 1.5 + Math.log2(link.count) * 1.5)),
     });

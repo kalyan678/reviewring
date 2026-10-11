@@ -115,7 +115,7 @@ A local dashboard over the graph foundation. It adds no second graph model and n
 | `src/reviewring/indicators.py` | Structural overlap indicators: reviewer pairs sharing at least two businesses, and the groups those pairs connect. The minimum of two is the provisional rule from spec Section 14. No score or probability. |
 | `src/reviewring/synthetic.py` | Fictional demo fixtures, rendered as response-shaped data and passed through the real parsers and merge. Identifiers carry a `synthetic-` prefix. |
 | `src/reviewring/views.py` | The privacy boundary: turns a graph into the only data the page receives. |
-| `src/reviewring/app.py`, `src/reviewring/web/` | Standard-library HTTP server bound to the loopback interface, one static page, one JSON endpoint (`/api/view?mode=real|synthetic`). |
+| `src/reviewring/app.py`, `src/reviewring/web/` | Standard-library HTTP server bound to the loopback interface, one static page, and a small JSON API. `/api/view?mode=real|synthetic` serves the views; the other routes are listed under Endpoints and Hosted demo mode. |
 
 **Framework.** The spec (Section 17) names Streamlit as the initial application framework. v0.1 uses the Python standard library and a static page instead: no UI framework was installed, and this adds no dependency, loads nothing from outside, sends no telemetry, and allows a strict content-security policy. The view models are framework-independent, so moving to Streamlit later would replace only `app.py` and `web/`.
 
@@ -149,6 +149,7 @@ Responses are parsed by the existing parsers and merged by `build_graph`, then s
 
 | Method and path | Purpose | Can send a SerpApi request |
 |---|---|---|
+| `GET /api/config` | Whether this is the hosted demo and, locally, whether a key is configured (yes or no only) | No |
 | `GET /api/session` | Session token, limits, whether a key is configured | No |
 | `POST /api/search/plan` | Validate a query; state the maximum cost | No |
 | `POST /api/search` | Run a planned search; return the selection list | At most 1 |

@@ -9,6 +9,31 @@
 
 ---
 
+> ## Original vision versus implemented release
+>
+> **This document is the original product and design specification, kept as written. It is not a description of the released application.** Several sections describe features that were proposed and never built. Where this document and the released code differ, `README.md` and `docs/ARCHITECTURE.md` describe what exists.
+>
+> | Area | Status in the release |
+> |---|---|
+> | Business search and review collection (5.1, 5.2) | Implemented. Run against the real service: one search, a first and a second review page. |
+> | Reviewer histories (5.3) | Implemented. Run against the real service for a few reviewers. Each history is a window of recent reviews, not a full record. The 20 to 30 histories of Experiment 1 were never collected. |
+> | Reviewer-business graph (5.4) | Implemented. Addresses, coordinates, reviewer names and review text are deliberately not read into the graph. |
+> | Overlap indicators (5.5, signal 1) | Implemented as reviewer pairs sharing two or more businesses, and the groups those pairs form. No such overlap has been observed in real data; it is shown only on fictional data. |
+> | One-hop expansion (5.6) | Implemented as a separate, confirmed step. Tested on simulated and fictional data only; never run against the real service. |
+> | Privacy-preserving visualization (Section 9) | Implemented, and stricter than proposed: real reviewers are never drawn individually, sets of fewer than five are not drawn at all, and businesses reached by expansion are not named. |
+> | Coordination risk scoring (Section 7) | **Not implemented.** No score, band, weight or cutoff exists anywhere in the release. |
+> | Community or dense-subgraph detection (Section 4) | Not implemented. Groups are the connected sets formed by overlapping pairs. |
+> | Temporal, geographic and other advanced signals (5.5 signals 2 to 7, Section 10) | Not implemented as signals. Categories and ratings are shown as context only. |
+> | Coordination-adjusted rating and other stretch features (Sections 22, 23) | Not implemented. |
+> | Streamlit, NetworkX, pandas, pydantic schemas (Section 17) | Not used. The application is a standard-library server with a static page. |
+> | No-code onboarding and hosted real investigations | Not implemented and not part of this specification. Real investigations need a local install and the user's own SerpApi key. A hosted copy serves the fictional demo only. |
+>
+> **Decision gates (Section 16).** Gate 1, API viability, passed. Gate 2, graph viability, was never passed: real data showed no reviewer pair sharing two businesses. The application was built anyway, on the project owner's decision, and the release says so.
+>
+> **Tagline.** The released application uses "Follow the reviewers. Explore the overlap." The original tagline above is kept as history; the release does not claim to find coordination.
+
+---
+
 # Specification Status
 
 LOCKED:
@@ -292,6 +317,8 @@ Do not introduce infrastructure unless it solves an observed requirement.
 ---
 
 # 7. Coordination Risk
+
+> **PROPOSED AND NOT IMPLEMENTED.** Nothing in this section exists in the released application. There is no coordination risk score, no "High Coordination Signal" or other band, and no weights or cutoffs. The figure `81 / 100` below was an illustration in a proposal; it was never computed from data and has not been validated.
 
 The system should never display:
 

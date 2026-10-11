@@ -658,6 +658,9 @@ function renderNetwork(view) {
       return row;
     })
   );
+  // The drawing was replaced, so whatever the pointer was over is gone: drop the
+  // temporary preview and keep only the pin.
+  hover = null;
   applySelection();
 }
 

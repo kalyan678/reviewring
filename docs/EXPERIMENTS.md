@@ -6,7 +6,9 @@ Experiment log, using the format from `PROJECT_SPEC.md` Section 24. Only observe
 
 **Raw data contract:** every uncached response is saved as a *sanitized raw response*: the complete SerpApi response before any application-level transformation, with the API key replaced by `[REDACTED]`. Schemas are validated against these files.
 
-**SerpApi requests attempted in total:** 13, of which 12 succeeded (6 in the experiments below, 2 in the first live dashboard validation, 3 in the live reviewer-history validation, one of which was rejected, 1 in the entry-limit validation, and 1 in the live pagination validation).
+**SerpApi requests attempted, 2026-10-05 to 2026-10-10:** 13, of which 12 succeeded (6 in the experiments below, 2 in the first live dashboard validation, 3 in the live reviewer-history validation, one of which was rejected, 1 in the entry-limit validation, and 1 in the live pagination validation).
+
+**Later run, 2026-10-12:** one successful business search and three collection requests, recorded under "Real-Data Investigation Run" below. They are not included in the 13.
 
 ---
 
@@ -256,6 +258,35 @@ One business, one further page. Third and fourth pages, and a response without a
 ### Decision
 
 **PASS — bounded review pagination works through the dashboard.**
+
+---
+
+## Real-Data Investigation Run
+
+**Date:** 2026-10-12
+**SerpApi searches observed:** 1 successful business search and 3 collection requests, which the application reported as new requests sent
+**Scope:** one complete run of the dashboard's Investigate workflow against the real service, followed by the Collected Data view, on a local install with a locally configured key. It is separate from the experiments and validations above, and its requests are not included in their total of 13.
+
+### Method
+
+A business was searched for and selected in the Investigate tab, and the collection was confirmed through the dashboard's own prompts. The Collected Data tab was then opened. The figures below were recorded by the project owner during that run. As elsewhere in this log, the business and its reviewers are not identified and only aggregate counts are recorded.
+
+### Results
+
+- **Search:** one business search, successful.
+- **Collection:** one review page and two reviewer histories. The application reported three new requests sent.
+- **Graph:** 5 reviewers, 12 businesses, 16 reviewer-business links.
+- **Overlap:** no reviewer pair shares two or more businesses in the retrieved sample.
+- **Collected Data:** the view loaded the locally saved responses and sent no new SerpApi request.
+- **Network display:** individual reviewer connections were not drawn for the real data, because sets of fewer than five reviewers are withheld. The sparse network is the result of that privacy rule, not a rendering failure.
+
+### Limitations
+
+One business, one review page, and two history windows, so histories were retrieved for 2 of the 5 reviewers. The result does not establish that no overlap exists outside the retrieved sample. The entry limit used and the number of entries each history returned are not recorded here. The request figures are the application's own report: whether the search was a new request or a saved response, and what SerpApi billed, were not independently checked.
+
+### Decision
+
+**PASS — the Investigate and Collected Data workflows ran end to end on real data.** It is not evidence about coordination. No reviewer pair meeting the overlap indicator has been observed in real data, so spec Gate 2 (graph viability) remains open and EXP-003 has still not run against the real service.
 
 ---
 

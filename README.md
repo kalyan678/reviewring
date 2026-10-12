@@ -33,7 +33,7 @@ It is not a tool for accusing a business or a reviewer, and nothing it shows sho
 | **Explore Demo** | A complete interactive walkthrough on fictional reviewers and businesses: the network, the overlap, expansion, and the before-and-after comparison | Nothing. No key, no requests. Run it locally, or open a hosted copy, where one has been deployed, with no installation |
 | **Investigate** | The real workflow: search for a business through SerpApi, confirm the most requests it may send, collect reviews and a few reviewer histories, and view the result | A local install and your own SerpApi key in a `.env` file |
 | **Collected Data** | A read-only view of every SerpApi response saved on your computer | Saved responses from earlier investigations. It combines all of them and does not separate them into cases |
-| **Hosted demo** | The same code serving Explore Demo only, on a public address | Nothing from the visitor. It cannot run Investigate or show Collected Data |
+| **Hosted demo** (optional) | The same code serving Explore Demo only, for anyone who deploys it. This README does not list a public deployment | Nothing from the visitor. It cannot run Investigate or show Collected Data |
 
 **Why Investigate needs setup.** Each real request is sent on your own SerpApi plan, so the key has to be yours. The key is kept in a file on your computer and is never sent to the browser. The responses contain real reviewer names and review text, and they stay on your computer too. Running locally is what keeps both of those private. There is no sign-up, no hosted investigation service, and no way to enter a key in the page.
 
@@ -221,7 +221,7 @@ Render provides `PORT` itself. Do not add `SERPAPI_API_KEY`: the hosted demo nev
 
 ## What has been verified against the real service
 
-All figures are from `docs/EXPERIMENTS.md`. Thirteen SerpApi requests were attempted in total; twelve succeeded.
+All figures are from `docs/EXPERIMENTS.md`. In the experiments and validations of 5 to 10 October 2026, thirteen SerpApi requests were attempted and twelve succeeded. The bullets below describe those runs. A later run on 12 October 2026 is reported separately beneath them, and its requests are not part of the thirteen.
 
 - **The API chain works.** Search returns business identifiers, a business's reviews return reviewer identifiers, a reviewer's history returns business identifiers, and those identifiers match across the three engines.
 - **The graph builds from real responses.** Six responses merged into 23 reviewers, 7 businesses, and 29 links in one connected component.
@@ -231,6 +231,14 @@ All figures are from `docs/EXPERIMENTS.md`. Thirteen SerpApi requests were attem
 
 - **The entry limit works:** one history requested with 50 entries returned 50, beginning with the same 10 as before.
 - **Review pagination works through the dashboard:** one second review page was collected with the token the first page returned. It held 10 reviews and the response provided a token for a further page, which was not used.
+
+**Real-data run, 12 October 2026.** One investigation of one real business, run through the Investigate tab on a local install with a locally configured key. The business and its reviewers are not identified here.
+
+- **Requests:** one successful business search, then a collection of one review page and two reviewer histories, for which the application reported three new requests sent. Whether the search was itself a new request, and what SerpApi billed for any of them, was not independently checked.
+- **Graph:** 5 reviewers, 12 businesses, and 16 reviewer-business links.
+- **No overlap was observed.** No reviewer pair shares two or more businesses in the retrieved sample. Coverage was limited to one review page and two history windows, so this does not establish that no overlap exists outside that sample.
+- **Collected Data loaded the saved responses** from the local files, with no new SerpApi request.
+- **The real-data network was sparse, as designed.** Individual reviewer connections were withheld by the privacy rules (sets of fewer than five reviewers are not drawn). This is suppression, not a rendering failure.
 
 Not verified against the real service: collecting more than two review pages in one investigation, the revised reviewer selection, overlap detection on real data that contains overlap, expansion to shared businesses (no qualifying business has been observed in real data), and timeouts. These are tested against a simulated SerpApi only. Expansion in particular has only ever run on simulated and fictional data.
 
